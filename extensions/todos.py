@@ -503,7 +503,7 @@ def extension_factory(pi):
     """Main entry point for the todos extension."""
 
     # Register session_start handler for initialization
-    async def on_session_start(event, ctx):
+    async def on_session_start(ctx, event=None):
         """Initialize todos directory and run GC on session start."""
         todos_dir = get_todos_dir(ctx.cwd)
         await ensure_todos_dir(todos_dir)

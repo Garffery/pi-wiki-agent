@@ -282,7 +282,7 @@ def extension_factory(api: Any) -> None:
         store_ready = True
 
     # Register session_start event
-    def on_session_start(event: Any, ctx: Any) -> None:
+    def on_session_start(ctx: Any, event: Any = None) -> None:
         nonlocal store_ready
         store_ready = False
         ensure_store(ctx)

@@ -1,3 +1,5 @@
 {
-  "extensions": ["extensions/todos.py", "extensions/dag_tasks"]
+  "extensions": ["extensions/todos.py", "extensions/dag_tasks","extensions/subagents"],
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro"
 }

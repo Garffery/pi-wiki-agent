@@ -147,6 +147,45 @@ class AgentSession:
         # ── Scoped models (for cycling) ───────────────────────────────────────
         self._scoped_models: list[dict[str, Model | ThinkingLevel | None]] | None = None
 
+    def wire_extension_messaging(self, extensions: list[Any]) -> None:
+        """
+        Enable send_message() on all loaded extensions.
+
+        Creates a callback that routes extension messages into the agent's
+        steer/followUp queues, and sets it on each Extension object.
+        """
+        agent = self._agent
+
+        def _sender(
+            custom_type: str,
+            content: str,
+            details: dict[str, Any] | None,
+            deliver_as: str,
+            trigger_turn: bool,
+        ) -> None:
+            from pi_ai.types import TextContent
+            msg_text = content
+            if details:
+                import json
+                msg_text = content + "\n\n<details>\n" + json.dumps(details, indent=2) + "\n</details>"
+
+            message = TextContent(type="text", text=msg_text)
+            if deliver_as == "followUp":
+                agent.follow_up(message)
+            else:
+                agent.steer(message)
+
+            if trigger_turn and agent._state.is_streaming:
+                pass  # steer will be picked up naturally on next turn
+            elif trigger_turn:
+                # Only continue if there's message history to continue from
+                if agent._state.messages:
+                    import asyncio
+                    asyncio.ensure_future(agent.continue_from_context())
+
+        for ext in extensions:
+            ext.message_sender = _sender
+
     # ── Tool construction ─────────────────────────────────────────────────────
 
     def _build_tools(self, extra_tools: list[AgentTool] | None = None) -> list[AgentTool]:

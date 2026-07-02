@@ -263,6 +263,10 @@ class ContextUsage:
 HandlerFn = Callable[..., Any | Awaitable[Any]]
 
 
+# MessageSender callback: (custom_type, content, details, deliver_as, trigger_turn) -> None
+MessageSender = Callable[[str, str, dict[str, Any] | None, str, bool], None]
+
+
 @dataclass
 class Extension:
     """A loaded extension."""
@@ -274,6 +278,7 @@ class Extension:
     commands: dict[str, RegisteredCommand] = field(default_factory=dict)
     flags: dict[str, ExtensionFlag] = field(default_factory=dict)
     shortcuts: dict[str, ExtensionShortcut] = field(default_factory=dict)
+    message_sender: MessageSender | None = None
 
 
 # ============================================================================
@@ -289,11 +294,23 @@ class ExtensionContext:
         session_id: str = "",
         model: Any = None,
         messages: list[Any] | None = None,
+        agent: Any = None,
+        is_idle_fn: Callable[[], bool] | None = None,
     ) -> None:
         self.cwd = cwd
         self.session_id = session_id
         self.model = model
         self.messages = messages or []
+        self._agent = agent
+        self._is_idle_fn = is_idle_fn
+
+    def is_idle(self) -> bool:
+        """Check if the parent agent is idle (not currently processing)."""
+        if self._is_idle_fn:
+            return self._is_idle_fn()
+        if self._agent:
+            return not getattr(self._agent, "_state", None) or not getattr(self._agent._state, "is_streaming", True)
+        return True
 
 
 class ExtensionAPI:
@@ -386,6 +403,39 @@ class ExtensionAPI:
             handler=handler,
             extension_path=self._extension.path,
         )
+
+    def send_message(
+        self,
+        content: str,
+        *,
+        custom_type: str = "extension-message",
+        details: dict[str, Any] | None = None,
+        deliver_as: str = "steer",
+        trigger_turn: bool = False,
+    ) -> bool:
+        """
+        Send a message to the parent agent session.
+
+        Args:
+            content: The message text
+            custom_type: Custom message type for rendering
+            details: Structured details attached to the message
+            deliver_as: How to deliver — "steer" (inject before next LLM call)
+                        or "followUp" (queue after agent finishes)
+            trigger_turn: If True, trigger a new LLM turn after delivery
+
+        Returns:
+            True if the message was sent, False if no sender is configured.
+        """
+        sender = self._extension.message_sender
+        if sender is None:
+            return False
+        sender(custom_type, content, details, deliver_as, trigger_turn)
+        return True
+
+    def set_message_sender(self, sender: MessageSender) -> None:
+        """Set the callback used by send_message(). Called by the session."""
+        self._extension.message_sender = sender
 
 
 ExtensionFactory = Callable[[ExtensionAPI], None | Awaitable[None]]

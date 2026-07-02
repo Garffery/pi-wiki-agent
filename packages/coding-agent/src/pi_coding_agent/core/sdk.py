@@ -229,6 +229,34 @@ async def create_agent_session(
         extra_tools=extension_tools,
     )
     
+    # Wire extension message senders so extensions can push messages
+    # back to the parent session (e.g. subagent background completion nudges)
+    if extensions_result_raw:
+        exts = extensions_result_raw.get("extensions", []) or []
+        if exts:
+            session.wire_extension_messaging(exts)
+
+    # Emit session_start to all extensions so they can initialize
+    if extensions_result_raw:
+        exts = extensions_result_raw.get("extensions", []) or []
+        for ext in exts:
+            handlers = getattr(ext, "handlers", {}).get("session_start", [])
+            for handler in handlers:
+                try:
+                    from .extensions.types import ExtensionContext
+                    ctx = ExtensionContext(
+                        cwd=cwd,
+                        session_id=getattr(session, "session_id", ""),
+                        model=model,
+                        agent=session._agent if hasattr(session, "_agent") else None,
+                    )
+                    result = handler(ctx, {"type": "session_start"})
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+
     # Apply scoped models if provided
     if options.scoped_models:
         session.set_scoped_models(options.scoped_models)

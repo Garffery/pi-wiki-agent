@@ -50,6 +50,46 @@ def _create_agent_stream() -> EventStream[AgentEvent, list[AgentMessage]]:
     )
 
 
+def _dict_to_message(d: dict) -> Any:
+    """Convert a dict-based message from a provider to an object with attribute access."""
+    from pi_ai.types import AssistantMessage as AM
+
+    usage = d.get("usage", {})
+    if isinstance(usage, dict):
+        from pi_ai.types import Usage, UsageCost
+        cost_dict = usage.get("cost", {})
+        if isinstance(cost_dict, dict):
+            cost = UsageCost(
+                input=cost_dict.get("input", 0),
+                output=cost_dict.get("output", 0),
+                cache_read=cost_dict.get("cache_read", 0),
+                cache_write=cost_dict.get("cache_write", 0),
+                total=cost_dict.get("total", 0),
+            )
+        else:
+            cost = cost_dict if isinstance(cost_dict, UsageCost) else UsageCost()
+        usage = Usage(
+            input=usage.get("input", 0),
+            output=usage.get("output", 0),
+            cache_read=usage.get("cache_read", 0),
+            cache_write=usage.get("cache_write", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            cost=cost,
+        )
+
+    return AM(
+        role=d.get("role", "assistant"),
+        content=d.get("content", []),
+        api=d.get("api", ""),
+        provider=d.get("provider", ""),
+        model=d.get("model", ""),
+        usage=usage,
+        stop_reason=d.get("stop_reason", "stop"),
+        error_message=d.get("error_message"),
+        timestamp=d.get("timestamp", 0),
+    )
+
+
 def agent_loop(
     prompts: list[AgentMessage],
     context: AgentContext,
@@ -288,27 +328,37 @@ async def _stream_assistant_response(
     response_stream = fn(config.model, llm_context, stream_opts)
 
     async for event in response_stream:
-        if event.type == "start":
-            partial_message = event.partial
+        # Support both object and dict event types (some providers yield dicts)
+        event_type = event.type if hasattr(event, "type") else event.get("type", "")
+        if event_type == "start":
+            partial_message = event.partial if hasattr(event, "partial") else event.get("partial")
+            if isinstance(partial_message, dict):
+                partial_message = _dict_to_message(partial_message)
             context.messages.append(partial_message)
             added_partial = True
             ev_stream.push(AgentEventMessageStart(message=partial_message))
 
-        elif event.type in (
+        elif event_type in (
             "text_start", "text_delta", "text_end",
             "thinking_start", "thinking_delta", "thinking_end",
             "toolcall_start", "toolcall_delta", "toolcall_end",
         ):
             if partial_message is not None:
-                partial_message = event.partial
+                partial_message = event.partial if hasattr(event, "partial") else event.get("partial")
+                if isinstance(partial_message, dict):
+                    partial_message = _dict_to_message(partial_message)
                 context.messages[-1] = partial_message
                 ev_stream.push(AgentEventMessageUpdate(
                     message=partial_message,
                     assistant_message_event=event,
                 ))
 
-        elif event.type in ("done", "error"):
-            final_message = event.message if event.type == "done" else event.error
+        elif event_type in ("done", "error"):
+            final_message = event.message if event_type == "done" else (
+                event.error if hasattr(event, "error") else event.get("error")
+            )
+            if isinstance(final_message, dict):
+                final_message = _dict_to_message(final_message)
             if added_partial:
                 context.messages[-1] = final_message
             else:

@@ -41,3 +41,11 @@ docs/archive/
 
 # Tests (don't push to remote)
 tests/
+
+# Desktop app
+desktop/node_modules/
+desktop/frontend/node_modules/
+desktop/electron/node_modules/
+desktop/frontend/dist/
+desktop/electron/dist/
+desktop/electron/out/

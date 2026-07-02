@@ -1,0 +1,22 @@
+{
+  "name": "pi-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi Desktop — Electron + React + FastAPI AI coding agent",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "uv run --directory .. python -m pi_desktop_backend.main",
+    "dev:frontend": "cd frontend && npm run dev",
+    "stop": "bash scripts/stop.sh",
+    "dev:electron": "cd electron && npm run build && NODE_ENV=development electron dist/main.js",
+    "build:frontend": "cd frontend && npm run build",
+    "build:electron": "cd electron && npm run build",
+    "build:backend": "bash scripts/build-backend.sh",
+    "build": "npm run build:frontend && npm run build:electron",
+    "package": "npm run build && cd electron && npx electron-builder",
+    "postinstall": "cd frontend && npm install && cd ../electron && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
