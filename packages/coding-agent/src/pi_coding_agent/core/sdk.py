@@ -217,6 +217,17 @@ async def create_agent_session(
         provider=model.provider if model else None,
     )
     
+    # Build ExtensionRunner from loaded extensions for hook dispatch
+    exts = extensions_result_raw.get("extensions", []) if extensions_result_raw else []
+    extension_runner = None
+    if exts:
+        from .extensions.runner import ExtensionRunner
+        extension_runner = ExtensionRunner(
+            exts,
+            cwd=cwd,
+            session_id=session_manager.get_session_id(),
+        )
+
     # Create session with all options
     session = AgentSession(
         cwd=cwd,
@@ -227,6 +238,7 @@ async def create_agent_session(
         model_registry=model_registry,
         settings_manager=settings_manager,
         extra_tools=extension_tools,
+        extension_runner=extension_runner,
     )
     
     # Apply scoped models if provided

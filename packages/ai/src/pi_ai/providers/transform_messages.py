@@ -33,7 +33,6 @@ def transform_messages(
 ) -> list[Message]:
     """
     Transform messages for cross-provider compatibility.
-    Mirrors transformMessages() in TypeScript.
     """
     tool_call_id_map: dict[str, str] = {}
 

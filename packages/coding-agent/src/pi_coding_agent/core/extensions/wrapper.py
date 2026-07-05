@@ -34,15 +34,34 @@ def wrap_registered_tools(registered_tools: list[Any], runner: Any) -> list[dict
     return [wrap_registered_tool(rt, runner) for rt in registered_tools]
 
 
-def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, Any]:
-    """Wrap an agent tool dict with extension interception callbacks.
+def _tool_attr(tool, name: str, default=None):
+    """Duck-type accessor: works with both dict and object tools."""
+    if isinstance(tool, dict):
+        return tool.get(name, default)
+    return getattr(tool, name, default)
+
+
+def _copy_tool(tool, **overrides):
+    """Duck-type copy: dict returns dict, Pydantic model returns new model."""
+    if isinstance(tool, dict):
+        out = dict(tool)
+        out.update(overrides)
+        return out
+    return tool.model_copy(update=overrides)
+
+
+def wrap_tool_with_extensions(tool: dict[str, Any] | Any, runner: Any) -> dict[str, Any] | Any:
+    """Wrap an agent tool with extension interception callbacks.
+
+    Supports both dict and AgentTool (Pydantic model) tools.
 
     - Emits tool_call before execution (can block)
     - Emits tool_result after execution (can modify result)
     """
     from pi_coding_agent.core.extensions.types import ToolCallEvent, ToolResultEvent
 
-    original_execute = tool["execute"]
+    original_execute = _tool_attr(tool, "execute")
+    tool_name = _tool_attr(tool, "name")
 
     async def _wrapped_execute(
         tool_call_id: str,
@@ -53,12 +72,12 @@ def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, An
         if runner.has_handlers("tool_call"):
             call_event = ToolCallEvent(
                 tool_call_id=tool_call_id,
-                tool_name=tool["name"],
+                tool_name=tool_name,
                 input=params,
             )
             call_result = await runner.emit_tool_call(call_event)
-            if call_result and getattr(call_result, "block", False):
-                reason = getattr(call_result, "reason", None) or "Tool execution was blocked by an extension"
+            if call_result and _tool_attr(call_result, "block", False):
+                reason = _tool_attr(call_result, "reason", None) or "Tool execution was blocked by an extension"
                 raise RuntimeError(reason)
 
         try:
@@ -69,7 +88,7 @@ def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, An
                 details = result.get("details") if isinstance(result, dict) else getattr(result, "details", None)
                 result_event = ToolResultEvent(
                     tool_call_id=tool_call_id,
-                    tool_name=tool["name"],
+                    tool_name=tool_name,
                     input=params,
                     content=content,
                     is_error=False,
@@ -77,8 +96,8 @@ def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, An
                 )
                 result_result = await runner.emit_tool_result(result_event)
                 if result_result:
-                    new_content = getattr(result_result, "content", None)
-                    new_details = getattr(result_result, "details", None)
+                    new_content = _tool_attr(result_result, "content", None)
+                    new_details = _tool_attr(result_result, "details", None)
                     if isinstance(result, dict):
                         out = dict(result)
                         if new_content is not None:
@@ -98,7 +117,7 @@ def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, An
             if runner.has_handlers("tool_result"):
                 err_event = ToolResultEvent(
                     tool_call_id=tool_call_id,
-                    tool_name=tool["name"],
+                    tool_name=tool_name,
                     input=params,
                     content=[{"type": "text", "text": str(err)}],
                     is_error=True,
@@ -106,9 +125,9 @@ def wrap_tool_with_extensions(tool: dict[str, Any], runner: Any) -> dict[str, An
                 await runner.emit_tool_result(err_event)
             raise
 
-    return {**tool, "execute": _wrapped_execute}
+    return _copy_tool(tool, execute=_wrapped_execute)
 
 
-def wrap_tools_with_extensions(tools: list[dict[str, Any]], runner: Any) -> list[dict[str, Any]]:
+def wrap_tools_with_extensions(tools: list[Any], runner: Any) -> list[Any]:
     """Wrap all agent tools with extension interception."""
     return [wrap_tool_with_extensions(tool, runner) for tool in tools]

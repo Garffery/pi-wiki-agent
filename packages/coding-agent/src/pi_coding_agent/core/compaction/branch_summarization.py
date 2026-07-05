@@ -336,3 +336,37 @@ async def generate_branch_summary(
         read_files=read_files,
         modified_files=modified_files,
     )
+
+
+# ============================================================================
+# High-level wrapper used by AgentSession.navigate_tree
+# ============================================================================
+
+
+async def summarize_branch(
+    session: Any,
+    old_leaf_id: str | None,
+    target_id: str,
+    model: Any,
+    api_key: str | None = None,
+    cancel_event: asyncio.Event | None = None,
+) -> BranchSummaryResult:
+    """Summarize the branch being left during tree navigation.
+
+    Collects entries between old_leaf_id and the common ancestor with target_id,
+    then generates a structured summary for context preservation.
+    """
+    if not old_leaf_id:
+        return BranchSummaryResult()
+
+    collected = collect_entries_for_branch_summary(session, old_leaf_id, target_id)
+
+    if not collected.entries:
+        return BranchSummaryResult()
+
+    return await generate_branch_summary(
+        entries=collected.entries,
+        model=model,
+        api_key=api_key or "",
+        cancel_event=cancel_event,
+    )

@@ -11,6 +11,7 @@ from .branch_summarization import (
     collect_entries_for_branch_summary,
     generate_branch_summary,
     prepare_branch_entries,
+    summarize_branch,
 )
 from .utils import (
     FileOperations,
@@ -39,4 +40,5 @@ __all__ = [
     "generate_branch_summary",
     "prepare_branch_entries",
     "serialize_conversation",
+    "summarize_branch",
 ]

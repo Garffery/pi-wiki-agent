@@ -130,13 +130,20 @@ class ExtensionRunner:
         
         return current_messages
 
-    async def emit_tool_call(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        """Emit tool_call event (before tool execution)."""
-        return await self.emit({"type": "tool_call", **event})
+    def _to_dict(self, event: Any) -> dict[str, Any]:
+        """Convert event to dict if it is a dataclass, otherwise return as-is."""
+        if isinstance(event, dict):
+            return event
+        from dataclasses import asdict
+        return asdict(event)
 
-    async def emit_tool_result(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        """Emit tool_result event (after tool execution)."""
-        return await self.emit({"type": "tool_result", **event})
+    async def emit_tool_call(self, event: dict[str, Any] | Any) -> dict[str, Any] | None:
+        """Emit tool_call event (before tool execution). Accepts dict or dataclass."""
+        return await self.emit({"type": "tool_call", **self._to_dict(event)})
+
+    async def emit_tool_result(self, event: dict[str, Any] | Any) -> dict[str, Any] | None:
+        """Emit tool_result event (after tool execution). Accepts dict or dataclass."""
+        return await self.emit({"type": "tool_result", **self._to_dict(event)})
 
     async def emit_resources_discover(
         self,

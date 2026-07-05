@@ -291,6 +291,13 @@ def extension_factory(api: Any) -> None:
     # Register task_manage tool
     async def execute_task_manage(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         """Execute task_manage tool."""
+        if isinstance(params, str):
+            try:
+                import json as _json
+                params = _json.loads(params)
+            except _json.JSONDecodeError:
+                return {"success": False, "error": "Invalid arguments: expected JSON"}
+
         ensure_store(ctx)
 
         action = params['action']
@@ -563,6 +570,13 @@ def extension_factory(api: Any) -> None:
     # Register task_next tool
     async def execute_task_next(params: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         """Execute task_next tool."""
+        if isinstance(params, str):
+            try:
+                import json as _json
+                params = _json.loads(params)
+            except _json.JSONDecodeError:
+                return {"success": False, "error": "Invalid arguments: expected JSON"}
+
         ensure_store(ctx)
 
         limit = params.get('limit', 5)

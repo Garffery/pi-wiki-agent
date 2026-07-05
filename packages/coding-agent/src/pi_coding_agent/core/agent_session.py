@@ -82,6 +82,7 @@ class AgentSession:
         model_registry: ModelRegistry | None = None,
         settings_manager: SettingsManager | None = None,
         extra_tools: list[AgentTool] | None = None,
+        extension_runner: Any = None,
     ) -> None:
         self.cwd = cwd or os.getcwd()
         self._settings = settings or Settings()
@@ -96,8 +97,14 @@ class AgentSession:
 
         self.session_id = self._session_manager.get_session_id()
 
+        # Store extension runner for hook dispatch
+        self._extension_runner = extension_runner
+
         # Build all tools; keep registry for set_active_tools_by_name
         self._all_tools: list[AgentTool] = self._build_tools(extra_tools or [])
+        if self._extension_runner:
+            from .extensions.wrapper import wrap_tools_with_extensions
+            self._all_tools = wrap_tools_with_extensions(self._all_tools, self._extension_runner)
         active_tools = list(self._all_tools)  # start with all tools active
         print(f"[AgentSession] 已注册 {len(self._all_tools)} 个工具: {[t.name for t in self._all_tools]}")
 
@@ -192,20 +199,17 @@ class AgentSession:
             return get_model("anthropic", "claude-3-5-sonnet-20241022")
 
     async def _transform_context(
-        self, 
-        messages: list[AgentMessage], 
+        self,
+        messages: list[AgentMessage],
         signal: asyncio.Event | None = None
     ) -> list[AgentMessage]:
         """
         Transform context before convert_to_llm.
-        
-        Currently returns messages unchanged. 
-        Will be connected to ExtensionRunner.emit_context when extension support is added.
+        Dispatches to ExtensionRunner.emit_context when extensions are loaded.
         Mirrors the transform_context callback in TypeScript SDK.
         """
-        # TODO: Connect to ExtensionRunner.emit_context when available
-        # if self._extension_runner:
-        #     return await self._extension_runner.emit_context(messages)
+        if self._extension_runner:
+            return await self._extension_runner.emit_context(messages)
         return messages
 
     async def _resolve_api_key(self, provider: str) -> str | None:
@@ -477,11 +481,14 @@ class AgentSession:
         if summarize and old_leaf_id:
             from .compaction.branch_summarization import summarize_branch
             try:
+                model = self._agent.state.model
+                api_key = await self._resolve_api_key(model.provider) if model else None
                 summary_result = await summarize_branch(
                     self._session_manager,
                     old_leaf_id,
                     target_id,
-                    self._agent.state.model,
+                    model,
+                    api_key=api_key,
                 )
                 if summary_result and summary_result.summary:
                     self._session_manager.append_branch_summary(

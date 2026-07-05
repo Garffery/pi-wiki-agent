@@ -15,12 +15,6 @@ R = TypeVar("R")  # result type
 class EventStream(Generic[T, R]):
     """
     An async-iterable stream of events T with a terminal result R.
-
-    Mirrors the TypeScript EventStream class:
-    - push(event) — emit an event
-    - end(result) — signal completion and store the result
-    - result() — await the final result
-    - async iteration — yields events until end() is called
     """
 
     def __init__(

@@ -515,8 +515,12 @@ def extension_factory(pi):
     # Register the todo tool
     async def execute_todo(args: dict[str, Any]) -> dict[str, Any]:
         """Execute todo tool actions."""
-        # Note: ctx would be passed from the tool execution context
-        # For now, using current directory
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                return {"error": "Invalid arguments: expected JSON"}
+
         cwd = os.getcwd()
         todos_dir = get_todos_dir(cwd)
         action = args.get("action", "")
