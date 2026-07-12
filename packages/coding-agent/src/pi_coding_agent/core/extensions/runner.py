@@ -32,10 +32,23 @@ class ExtensionRunner:
         self._extensions = extensions
         self._cwd = cwd
         self._session_id = session_id
+        self._session_data: dict[str, Any] = {}
 
     @property
     def extensions(self) -> list[Extension]:
         return self._extensions
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def session_data(self) -> dict[str, Any]:
+        return self._session_data
+
+    def set_session_data(self, data: dict[str, Any]) -> None:
+        """Set session-scoped data accessible to all extension event handlers."""
+        self._session_data = data
 
     def has_handlers(self, event_type: str) -> bool:
         """Check if any extension has handlers for this event type."""
@@ -56,6 +69,7 @@ class ExtensionRunner:
                     ctx = ExtensionContext(
                         cwd=self._cwd,
                         session_id=self._session_id,
+                        metadata=self._session_data,
                     )
                     result = handler(ctx, event)
                     if inspect.isawaitable(result):
@@ -115,6 +129,7 @@ class ExtensionRunner:
                     ctx = ExtensionContext(
                         cwd=self._cwd,
                         session_id=self._session_id,
+                        metadata=self._session_data,
                     )
                     # Pass current_messages to handler
                     result = handler(ctx, {"type": "context", "messages": current_messages})

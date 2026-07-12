@@ -1,6 +1,6 @@
 # Windows 兼容性修复总结
 
-本文档记录了为使 `pi-mono-python` 在 Windows 上正常工作所做的修复。
+本文档记录了为使 `pi-wiki-agent` 在 Windows 上正常工作所做的修复。
 
 ## 修复的问题
 

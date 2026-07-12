@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wiki 管理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="header-left">
+        <span class="logo-text">Wiki 管理</span>
+        <span class="version-tag">v0.1.0</span>
+      </div>
+      <div class="header-right">
+        <span class="status-dot" :class="{ online: apiOnline }"></span>
+        <span class="status-text">{{ apiOnline ? '已连接' : '未连接' }}</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-main">
+          <div class="section-header">
+            <span class="section-title">项目管理</span>
+            <button class="btn-ghost" @click="showAddProject = true">+ 添加</button>
+          </div>
+          <ul class="project-list">
+            <li v-for="p in projects" :key="p.name"
+                :class="{ active: selectedProject === p.name }"
+                @click="selectProject(p.name)">
+              <span class="project-name">{{ p.name }}</span>
+              <span v-if="p.pending_commits > 0" class="badge">{{ p.pending_commits }}</span>
+            </li>
+          </ul>
+          <div v-if="projects.length === 0" class="empty-text">暂无项目</div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="sidebar-divider"></div>
+          <label class="field-label">模型</label>
+          <select class="select-input" v-model="selectedModel">
+            <option value="">默认模型</option>
+            <option v-for="m in models" :key="m.provider + ':' + m.model_id"
+                    :value="m.provider + ':' + m.model_id">
+              {{ m.name }}
+            </option>
+          </select>
+          <button class="btn-ghost btn-block"
+                  :class="{ active: currentView === 'settings' }"
+                  @click="openSettings">配置</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <!-- ═══ Settings View (always accessible) ═══ -->
+        <template v-if="currentView === 'settings'">
+          <div class="content-header">
+            <h2 class="page-title">配置</h2>
+            <button class="btn-secondary" @click="currentView = 'commits'">← 返回</button>
+            </div>
+
+            <div class="settings-tabs">
+              <button :class="{ active: settingsTab === 'models' }" @click="settingsTab = 'models'">模型</button>
+              <button :class="{ active: settingsTab === 'filters' }" @click="settingsTab = 'filters'">过滤器</button>
+            </div>
+
+            <!-- Models tab -->
+            <div v-if="settingsTab === 'models'" class="settings-card">
+              <div class="settings-section">
+                <h4>可用模型</h4>
+                <p class="modal-desc">已检测到 API Key 的模型（内置 + 自定义）</p>
+                <table class="model-table" v-if="models.length > 0">
+                  <thead>
+                    <tr><th>名称</th><th>模型</th><th>上下文</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in models" :key="m.provider + ':' + m.model_id">
+                      <td>{{ m.name }}</td>
+                      <td><code>{{ m.provider }}:{{ m.model_id }}</code></td>
+                      <td>{{ (m.context_window / 1024).toFixed(0) }}K</td>
+                      <td><button class="btn-ghost btn-danger" @click="deleteModel(m)">删除</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p v-else class="empty-text">暂无可用模型</p>
+              </div>
+              <div class="settings-divider"></div>
+              <div class="settings-section">
+                <h4>添加自定义模型</h4>
+                <p class="modal-desc">写入 ~/.pi/agent/models.json</p>
+                <form @submit.prevent="addModel">
+                  <div class="form-row">
+                    <div><label class="form-label">名称</label><input class="form-input" v-model="newModel.name" required placeholder="DeepSeek V3"></div>
+                    <div><label class="form-label">接口</label><input class="form-input" v-model="newModel.provider" required placeholder="deepseek"></div>
+                    <div><label class="form-label">模型 ID</label><input class="form-input" v-model="newModel.model_id" required placeholder="deepseek-chat"></div>
+                  </div>
+                  <label class="form-label">API 地址</label>
+                  <input class="form-input" v-model="newModel.base_url" required placeholder="https://api.deepseek.com/v1">
+                  <label class="form-label">API Key</label>
+                  <input class="form-input" v-model="newModel.api_key" placeholder="留空使用环境变量">
+                  <button type="submit" class="btn-primary" style="margin-top:12px">添加</button>
+                  <p v-if="modelError" class="form-error">{{ modelError }}</p>
+                </form>
+              </div>
+            </div>
+
+            <!-- Filters tab -->
+            <div v-if="settingsTab === 'filters'" class="settings-card">
+              <div v-if="!selectedProject" class="empty-card">请先在左侧选择一个项目</div>
+              <template v-else>
+                <div class="settings-section">
+                  <div class="filter-header">
+                    <h4>过滤规则</h4>
+                    <label class="toggle-label">
+                      <input type="checkbox" v-model="filterEnabled" @change="toggleFilter">
+                      <span>{{ filterEnabled ? '已启用' : '已禁用' }}</span>
+                    </label>
+                  </div>
+                  <p class="modal-desc">匹配的提交或文件将被跳过，不触发 wiki 同步</p>
+                  <table class="model-table" v-if="filters.length > 0">
+                    <thead>
+                      <tr><th>类型</th><th>模式</th><th>说明</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(f, i) in filters" :key="i">
+                        <td><span class="tag" :class="'tag-' + f.type">{{ f.type === 'path' ? '路径' : '消息' }}</span></td>
+                        <td><code>{{ f.pattern }}</code></td>
+                        <td class="col-desc">{{ f.description }}</td>
+                        <td><button class="btn-ghost btn-danger" @click="deleteFilter(i)">删除</button></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p v-else class="empty-text">暂无过滤规则</p>
+                </div>
+                <div class="settings-divider"></div>
+                <div class="settings-section">
+                  <h4>添加规则</h4>
+                  <form @submit.prevent="addFilter">
+                    <div class="form-row">
+                      <div>
+                        <label class="form-label">类型</label>
+                        <select class="form-input" v-model="newFilter.type">
+                          <option value="path">路径 (glob)</option>
+                          <option value="message">消息 (正则)</option>
+                        </select>
+                      </div>
+                      <div style="flex:2">
+                        <label class="form-label">模式</label>
+                        <input class="form-input" v-model="newFilter.pattern" required
+                               :placeholder="newFilter.type === 'path' ? '.wiki/**, test/**' : '^debug:, \\[skip-wiki\\]'">
+                      </div>
+                    </div>
+                    <label class="form-label">说明</label>
+                    <input class="form-input" v-model="newFilter.description" placeholder="可选">
+                    <button type="submit" class="btn-primary" style="margin-top:12px">添加</button>
+                    <p v-if="filterError" class="form-error">{{ filterError }}</p>
+                  </form>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- ═══ Commits View (default) ═══ -->
+          <template v-if="currentView === 'commits'">
+            <template v-if="!selectedProject">
+              <div class="content-empty"><p>选择一个项目开始</p></div>
+            </template>
+            <template v-if="selectedProject">
+            <div class="content-header">
+              <h2 class="page-title">{{ selectedProject }}</h2>
+              <div class="content-actions">
+                <button class="btn-primary" @click="syncAll" :disabled="syncing">
+                  {{ syncing ? '同步中...' : '全部同步' }}
+                </button>
+                <button class="btn-secondary" @click="refreshCommits" :disabled="loading">刷新</button>
+              </div>
+            </div>
+
+            <div v-if="commits.length === 0 && !loading" class="empty-card">暂无待处理提交</div>
+            <div v-if="loading" class="loading-text">加载中...</div>
+
+            <table class="commit-table" v-if="commits.length > 0">
+              <thead>
+                <tr><th>Hash</th><th>提交信息</th><th class="col-right">文件</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in commits" :key="c.revision"
+                    :class="{ selected: selectedCommit === c.revision }"
+                    @click="previewCommit(c.revision)">
+                  <td><code>{{ c.revision.slice(0, 8) }}</code></td>
+                  <td>{{ c.message }}</td>
+                  <td class="col-right">{{ c.files.length }}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div v-if="commitDetail" class="detail-card">
+              <div class="detail-header">
+                <h3 class="detail-title">{{ commitDetail.message }}</h3>
+                <p class="detail-subtitle">{{ commitDetail.author }} · {{ commitDetail.timestamp }}</p>
+              </div>
+
+              <div v-if="Object.keys(commitDetail.affected).length > 0" class="detail-section">
+                <h4 class="section-label">受影响的 Wiki 章节</h4>
+                <div class="file-tree">
+                  <div v-for="(entries, page) in commitDetail.affected" :key="page" class="tree-node">
+                    <div class="tree-folder">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                      <span>{{ page }}</span>
+                      <span class="tree-count">{{ entries.length }}</span>
+                    </div>
+                    <div class="tree-children">
+                      <div v-for="e in entries" :key="e.section_id" class="tree-file">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        <span class="tree-section">{{ e.section_id }}</span>
+                        <code class="tree-source">{{ e.file }}</code>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p v-else class="empty-text">此提交没有关联的 Wiki 章节</p>
+
+              <details class="diff-toggle">
+                <summary>变更详情 ({{ commitDetail.diff.length }} 字符)</summary>
+                <pre class="diff-content">{{ commitDetail.diff }}</pre>
+              </details>
+
+              <div class="detail-actions">
+                <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
+                  {{ syncing ? '同步中...' : '同步此提交' }}
+                </button>
+                <div v-if="syncing && (streamText || streamTools.length > 0)" class="stream-panel">
+                  <div v-if="streamTools.length > 0" class="stream-tools">
+                    <div v-for="t in streamTools" :key="t.name + t.status" class="stream-tool"
+                         :class="{ done: t.status === 'done', error: t.status === 'error', running: t.status === 'running' }">
+                      <span class="tool-dot"></span>
+                      <span class="tool-name">{{ t.name }}</span>
+                      <span class="tool-status">{{ t.status === 'running' ? '执行中' : t.status === 'done' ? '完成' : '失败' }}</span>
+                    </div>
+                  </div>
+                  <pre class="stream-output" v-if="streamText">{{ streamText }}</pre>
+                </div>
+                <div v-if="syncResult" class="sync-result" :class="{ error: !syncResult.success }">
+                  <template v-if="syncResult.success">已修改 {{ syncResult.pages?.length || 0 }} 个页面</template>
+                  <template v-else>{{ syncResult.error }}</template>
+                </div>
+              </div>
+            </div>
+          </template>
+        </template>
+      </main>
+    </div>
+
+    <!-- Add Project Modal -->
+    <div v-if="showAddProject" class="modal-overlay" @click.self="showAddProject = false">
+      <div class="modal-card">
+        <h3 class="modal-title">添加项目</h3>
+        <form @submit.prevent="addProject">
+          <label class="form-label">名称</label>
+          <input class="form-input" v-model="newProject.name" required placeholder="例如: taskman">
+          <label class="form-label">路径</label>
+          <input class="form-input" v-model="newProject.path" required placeholder="D:/project/wiki-demo-taskman">
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showAddProject = false">取消</button>
+            <button type="submit" class="btn-primary">添加</button>
+          </div>
+          <p v-if="addError" class="form-error">{{ addError }}</p>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

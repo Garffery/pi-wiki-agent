@@ -1,4 +1,4 @@
-# pi-mono-python
+# pi-wiki-agent
 
 > Python port of the [pi-mono](../pi-mono) TypeScript monorepo — four packages with aligned code, logic, algorithms, and folder structure.
 >
@@ -29,8 +29,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### Clone and Install
 
 ```bash
-git clone https://github.com/openxjarvis/pi-mono-python.git
-cd pi-mono-python
+git clone https://github.com/openxjarvis/pi-wiki-agent.git
+cd pi-wiki-agent
 
 # Install all four packages and their dependencies in one step
 uv sync
@@ -283,8 +283,8 @@ $env:PYTHONIOENCODING = "utf-8"
 ### Setup
 
 ```bash
-git clone https://github.com/openxjarvis/pi-mono-python.git
-cd pi-mono-python
+git clone https://github.com/openxjarvis/pi-wiki-agent.git
+cd pi-wiki-agent
 uv sync
 ```
 
@@ -350,7 +350,7 @@ uv run pyright packages/
 ## Project Structure
 
 ```
-pi-mono-python/
+pi-wiki-agent/
 ├── .env                          ← API keys (never commit)
 ├── pyproject.toml                ← uv workspace root
 ├── conftest.py                   ← global pytest config (.env loader)

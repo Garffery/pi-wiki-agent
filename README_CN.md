@@ -1,4 +1,4 @@
-# pi-mono-python
+# pi-wiki-agent
 
 [pi-mono](../pi-mono) TypeScript monorepo 的 Python 移植版本 — 四个包，代码、逻辑、算法和文件夹结构完全对齐。
 
@@ -27,8 +27,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### 克隆和安装
 
 ```bash
-git clone https://github.com/openxjarvis/pi-mono-python.git
-cd pi-mono-python
+git clone https://github.com/openxjarvis/pi-wiki-agent.git
+cd pi-wiki-agent
 
 # 一步安装所有四个包及其依赖
 uv sync
@@ -186,7 +186,7 @@ LIVE_TESTS=1 uv run pytest packages/ai/tests/ -v
 ## 项目结构
 
 ```
-pi-mono-python/
+pi-wiki-agent/
 ├── .env                          ← API 密钥（永远不要提交）
 ├── pyproject.toml                ← uv 工作区根
 ├── conftest.py                   ← 全局 pytest 配置（.env 加载器）
@@ -340,8 +340,8 @@ $env:PYTHONIOENCODING = "utf-8"
 ### 设置开发环境
 
 ```bash
-git clone https://github.com/openxjarvis/pi-mono-python.git
-cd pi-mono-python
+git clone https://github.com/openxjarvis/pi-wiki-agent.git
+cd pi-wiki-agent
 uv sync
 ```
 

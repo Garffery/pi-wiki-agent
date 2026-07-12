@@ -1,10 +1,11 @@
 """
-AgentSession — mirrors packages/coding-agent/src/core/agent-session.ts
+WikiSession — standalone agent session for wiki document synchronization.
 
-Central class managing agent lifecycle, session persistence, tools, and events.
-Full parity with TypeScript: auto-retry, overflow compaction, tool management,
-model/thinking cycling, context usage, session stats, and queue management.
+Contains the full AgentSession implementation from coding-agent, customized with
+wiki-specific features: source-to-section indexing, commit-driven prompt building,
+extension loading with wiki-specific wrapper, and scoped tool registration.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,9 +13,10 @@ import html
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
-from ..logging import logger
+
 from pi_agent import Agent, AgentOptions
 from pi_agent.types import (
     AgentEvent,
@@ -25,14 +27,18 @@ from pi_agent.types import (
 from pi_ai import get_model, is_context_overflow
 from pi_ai.types import AssistantMessage, ImageContent, Model, TextContent, UserMessage
 
-from .auth_storage import AuthStorage
-from .compaction import compact_context, should_compact
-from .messages import wrap_convert_to_llm
-from .model_registry import ModelRegistry
-from .session_manager import SessionManager
-from .settings_manager import Settings, SettingsManager
-from .system_prompt import build_system_prompt
-from .tools import (
+from ..logging import logger
+from ..indexer import WikiIndexer
+from ..metadata import IndexEntry
+from ..prompt import WIKI_SYSTEM_PROMPT, build_commit_prompt
+
+from pi_coding_agent.core.auth_storage import AuthStorage
+from pi_coding_agent.core.compaction import compact_context, should_compact
+from pi_coding_agent.core.messages import wrap_convert_to_llm
+from pi_coding_agent.core.model_registry import ModelRegistry
+from pi_coding_agent.core.session_manager import SessionManager
+from pi_coding_agent.core.settings_manager import Settings, SettingsManager
+from pi_coding_agent.core.tools import (
     create_bash_tool,
     create_edit_tool,
     create_find_tool,
@@ -55,25 +61,44 @@ _RETRY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# ── Wiki tools (subset of coding tools) ──────────────────────────────────────
+WIKI_TOOLS = ["read", "write", "edit", "grep", "find", "ls"]
 
-class AgentSession:
+
+@dataclass
+class SyncResult:
+    """Result of a wiki sync operation."""
+
+    commit_files: list[str]
+    affected: dict[str, list[IndexEntry]]
+    wiki_pages_modified: list[str] = field(default_factory=list)
+    session_id: str = ""
+    dry_run: bool = False
+
+
+class WikiSession:
     """
-    Manages an agent session with persistence, tools, and events.
-    Mirrors AgentSession in TypeScript.
+    Manages an agent session for wiki document synchronization.
 
-    Key features vs. old version:
-    - Per-message session persistence (message_end, not agent_end)
-    - Auto-retry with exponential backoff
-    - Overflow-aware auto-compaction (two paths: overflow vs threshold)
-    - Tool registry with set_active_tools_by_name()
-    - Model cycling (cycle_model), thinking cycling (cycle_thinking_level)
-    - Context usage and session statistics
-    - Queue management (clear_queue, pending_message_count)
+    Contains the full AgentSession implementation with wiki-specific
+    capabilities: source-to-section indexing, commit-driven prompt building,
+    extension loading with wiki-specific wrapper, and scoped tool registration.
+
+    Usage::
+
+        ws = WikiSession("D:/project/wiki-demo-taskman")
+        result = await ws.sync_from_commit(
+            changed_files=["src/taskman/cli.py"],
+            commit_message="feat: add --json flag to list command",
+            diff="+    --json: Output results as JSON\\n...",
+        )
+        print(result.wiki_pages_modified)
+        await ws.close()
     """
 
     def __init__(
         self,
-        cwd: str | None = None,
+        project_root: str | Path,
         model: Model | None = None,
         settings: Settings | None = None,
         session_id: str | None = None,
@@ -84,7 +109,36 @@ class AgentSession:
         extra_tools: list[AgentTool] | None = None,
         extension_runner: Any = None,
     ) -> None:
-        self.cwd = cwd or os.getcwd()
+        self._wiki_project_root = Path(project_root)
+        self.cwd = str(project_root)
+        logger.info("WikiSession 初始化: project_root={}", self._wiki_project_root)
+
+        # Load .env so API keys are visible
+        try:
+            from dotenv import load_dotenv
+            for env_dir in [self._wiki_project_root, Path.cwd()]:
+                env_file = env_dir / ".env"
+                if env_file.exists():
+                    load_dotenv(env_file)
+        except ImportError:
+            pass
+
+        self._indexer = WikiIndexer(project_root)
+
+        # ── Load extensions (wiki-specific pipeline) ─────────────────────────
+        extension_tools: list[Any] = []
+        if extension_runner is None:
+            extension_tools, extension_runner = self._load_extensions(cwd=str(project_root))
+
+        if extra_tools and extension_tools:
+            extra_tools = list(extra_tools) + extension_tools
+        elif extension_tools:
+            extra_tools = extension_tools
+
+        # Capture extension tool names before building
+        self._extension_tool_names = [t.name for t in extension_tools]
+
+        # ── Standard AgentSession init ───────────────────────────────────────
         self._settings = settings or Settings()
         self._auth_storage = auth_storage or AuthStorage()
         self._model_registry = model_registry or ModelRegistry()
@@ -102,19 +156,49 @@ class AgentSession:
 
         # Build all tools; keep registry for set_active_tools_by_name
         self._all_tools: list[AgentTool] = self._build_tools(extra_tools or [])
+
+        # ── Wiki tool guard (built-in, always active) ─────────────────────
+        from .extensions.wiki_tool_wrapper import WikiToolGuard, wrap_tools_with_wiki_guards
+        self._wiki_tool_guard = WikiToolGuard(cwd=self.cwd)
+        self._all_tools = wrap_tools_with_wiki_guards(self._all_tools, self._wiki_tool_guard)
+
+        # ── Wrap tools with extension event dispatch ──────────────────────
         if self._extension_runner:
             from .extensions.wrapper import wrap_tools_with_extensions
             self._all_tools = wrap_tools_with_extensions(self._all_tools, self._extension_runner)
+
         active_tools = list(self._all_tools)  # start with all tools active
-        print(f"[AgentSession] 已注册 {len(self._all_tools)} 个工具: {[t.name for t in self._all_tools]}")
+        logger.info("已注册 {} 个工具: {}", len(self._all_tools), [t.name for t in self._all_tools])
 
         # Resolve model
         resolved_model = model or self._resolve_default_model()
 
-        # Build system prompt (stored as _base_system_prompt so it can be rebuilt)
-        self._base_system_prompt = build_system_prompt(
-            self.cwd, selected_tools=[t.name for t in active_tools]
+        # ── Resource loader (skills + context files, mirroring coding-agent) ─
+        from .resource_loader import ResourceLoader, ResourceLoaderOptions, _load_project_context_files
+        self._resource_loader = ResourceLoader(
+            ResourceLoaderOptions(cwd=self.cwd, settings_manager=self._settings_manager)
         )
+        # Load skills synchronously (file I/O, no async needed)
+        self._resource_loader._update_skills_from_paths(
+            self._resource_loader._resolve_resource_paths_from_settings("skills")
+            + self._resource_loader._additional_skill_paths
+        )
+        skills_data = self._resource_loader.get_skills()
+        logger.info("已加载 {} 个技能", len(skills_data.get("skills", [])))
+
+        # Load context files (AGENTS.md / CLAUDE.md)
+        context_files = _load_project_context_files(self.cwd)
+        logger.info("已加载 {} 个上下文文件", len(context_files))
+
+        # Build system prompt with context + skills appended
+        self._base_system_prompt = WIKI_SYSTEM_PROMPT
+        if context_files:
+            self._base_system_prompt += "\n\n# Project Context\n\n"
+            for cf in context_files:
+                self._base_system_prompt += f"## {cf['path']}\n\n{cf['content']}\n\n"
+        from .skills import format_skills_for_prompt
+        if skills_data["skills"]:
+            self._base_system_prompt += format_skills_for_prompt(skills_data["skills"])
 
         # Create convertToLlm wrapper with blockImages support
         convert_to_llm_fn = wrap_convert_to_llm(self._settings_manager.get_block_images())
@@ -153,6 +237,11 @@ class AgentSession:
 
         # ── Scoped models (for cycling) ───────────────────────────────────────
         self._scoped_models: list[dict[str, Model | ThinkingLevel | None]] | None = None
+
+        # ── Restrict active tools to wiki subset ─────────────────────────────
+        active_tool_names = list(WIKI_TOOLS) + self._extension_tool_names
+        self.set_active_tools_by_name(active_tool_names)
+        logger.info("可用工具: {}", active_tool_names)
 
     # ── Tool construction ─────────────────────────────────────────────────────
 
@@ -385,7 +474,9 @@ class AgentSession:
 
         # Set session-scoped data on extension runner for tool guards and event handlers
         if session_data and self._extension_runner:
-            self._extension_runner.set_session_data(session_data)
+            setter = getattr(self._extension_runner, "set_session_data", None)
+            if setter:
+                setter(session_data)
 
         await self._agent.prompt(msgs)
         await self._wait_for_retry()
@@ -535,14 +626,14 @@ class AgentSession:
 
         return {"cancelled": False, "editorText": editor_text}
 
-    async def create_branched_session(self, branch_point_id: str) -> "AgentSession":
+    async def create_branched_session(self, branch_point_id: str) -> "WikiSession":
         """
         Create a new session branching from a specific entry.
         Mirrors createBranchedSession() via SessionManager.branch().
         """
         new_sm = self._session_manager.branch(branch_point_id, self.cwd)
-        branched = AgentSession(
-            cwd=self.cwd,
+        branched = WikiSession(
+            project_root=self.cwd,
             model=self._agent.state.model,
             settings=self._settings,
             session_manager=new_sm,
@@ -644,16 +735,12 @@ class AgentSession:
     def set_active_tools_by_name(self, tool_names: list[str]) -> None:
         """
         Set active tools by name. Rebuilds system prompt to reflect new tool set.
-        Mirrors setActiveToolsByName() in TypeScript.
+        Wiki uses a fixed system prompt; tool set changes do not regenerate it.
         """
         name_set = set(tool_names)
         active = [t for t in self._all_tools if t.name in name_set]
         self._agent.set_tools(active)
-        valid_names = [t.name for t in active]
-        self._base_system_prompt = build_system_prompt(
-            self.cwd, selected_tools=valid_names
-        )
-        logger.info("基础系统提示词: {}", self._base_system_prompt)
+        self._base_system_prompt = WIKI_SYSTEM_PROMPT
         self._agent.set_system_prompt(self._base_system_prompt)
 
     # ── Model management (2g) ─────────────────────────────────────────────────
@@ -816,7 +903,7 @@ class AgentSession:
 
     # ── Session management ────────────────────────────────────────────────────
 
-    async def fork(self, entry_id: str | None = None) -> "AgentSession":
+    async def fork(self, entry_id: str | None = None) -> "WikiSession":
         """
         Fork the session from a specific entry (or current leaf).
         Mirrors fork() in TypeScript.
@@ -835,8 +922,8 @@ class AgentSession:
         sessions_dir = self._session_manager.get_session_dir()
         src_path = self._session_manager.get_session_file()
         forked_sm = SessionManager.fork_from(src_path, self.cwd, sessions_dir)
-        forked = AgentSession(
-            cwd=self.cwd,
+        forked = WikiSession(
+            project_root=self.cwd,
             model=self._agent.state.model,
             settings=self._settings,
             session_manager=forked_sm,
@@ -1145,10 +1232,6 @@ class AgentSession:
 
     def set_auto_compaction_enabled(self, enabled: bool) -> None:
         """Enable or disable auto-compaction."""
-        # SettingsManager doesn't have set_compaction_enabled
-        # This is a read-only property from settings files
-        # In TS version this calls settingsManager.setCompactionEnabled
-        # For now, this is a no-op as settings are file-based
         pass
 
     @property
@@ -1158,10 +1241,6 @@ class AgentSession:
 
     def set_auto_retry_enabled(self, enabled: bool) -> None:
         """Enable or disable auto-retry."""
-        # SettingsManager doesn't have set_retry_enabled
-        # This is a read-only property from settings files
-        # In TS version this calls settingsManager.setRetryEnabled
-        # For now, this is a no-op as settings are file-based
         pass
 
     @property
@@ -1173,9 +1252,7 @@ class AgentSession:
         """
         Bind extension UI context and handlers.
         Mirrors bindExtensions() in TypeScript.
-        This is a stub for future extension support.
         """
-        # TODO: Implement extension bindings when extension system is added
         pass
 
     async def reload(self) -> None:
@@ -1183,10 +1260,7 @@ class AgentSession:
         Reload configuration and resources.
         Mirrors reload() in TypeScript.
         """
-        # Reload settings
         await self._settings_manager.reload()
-        # Reset API providers if needed
-        # TODO: Add resetApiProviders when available
         pass
 
     async def execute_bash(
@@ -1198,7 +1272,7 @@ class AgentSession:
         """
         Execute a bash command and return the result.
         Mirrors executeBash() in TypeScript.
-        
+
         Returns dict with:
             - output: str
             - exit_code: int
@@ -1207,13 +1281,11 @@ class AgentSession:
             - full_output_path: str | None
         """
         from pi_ai.types import ToolResultMessage
-        
+
         # Apply command prefix if configured
         prefix = self._settings_manager.get_shell_command_prefix()
         resolved_command = f"{prefix}\n{command}" if prefix else command
-        
-        # Execute bash command
-        # TODO: Integrate with actual bash executor when available
+
         import subprocess
         try:
             proc = subprocess.run(
@@ -1229,7 +1301,7 @@ class AgentSession:
             cancelled = False
             truncated = False
             full_output_path = None
-            
+
             if on_chunk:
                 on_chunk(output)
         except subprocess.TimeoutExpired:
@@ -1244,7 +1316,7 @@ class AgentSession:
             cancelled = False
             truncated = False
             full_output_path = None
-        
+
         result = {
             "output": output,
             "exit_code": exit_code,
@@ -1252,14 +1324,14 @@ class AgentSession:
             "truncated": truncated,
             "full_output_path": full_output_path,
         }
-        
+
         # Record result in session
         self.record_bash_result(
             tool_call_id="manual_exec",
             output=output,
             exit_code=exit_code,
         )
-        
+
         return result
 
     def abort_bash(self) -> None:
@@ -1267,7 +1339,6 @@ class AgentSession:
         Abort current bash execution.
         Mirrors abortBash() in TypeScript.
         """
-        # TODO: Integrate with bash executor abort mechanism
         pass
 
     def set_session_name(self, name: str) -> None:
@@ -1281,14 +1352,14 @@ class AgentSession:
         """
         Get all user messages suitable for forking.
         Mirrors getUserMessagesForForking() in TypeScript.
-        
+
         Returns list of dicts with:
             - entry_id: str
             - text: str
         """
         entries = self._session_manager.get_entries()
         result: list[dict[str, str]] = []
-        
+
         for entry in entries:
             if entry.type != "message":
                 continue
@@ -1297,7 +1368,7 @@ class AgentSession:
                 text = self._extract_user_message_text(msg_data.get("content", ""))
                 if text:
                     result.append({"entry_id": entry.id, "text": text})
-        
+
         return result
 
     def _extract_user_message_text(self, content: str | list[dict] | Any) -> str:
@@ -1316,10 +1387,134 @@ class AgentSession:
         """
         Check if any extensions handle the given event type.
         Mirrors hasExtensionHandlers() in TypeScript.
-        This is a stub for future extension support.
         """
-        # TODO: Implement when extension system is added
         return False
+
+    # ── Wiki-specific ─────────────────────────────────────────────────────────
+
+    @property
+    def indexer(self) -> WikiIndexer:
+        return self._indexer
+
+    @staticmethod
+    def _load_extensions(cwd: str = "") -> tuple[list, Any]:
+        """Discover and load extensions using wiki-agent's extension system."""
+        from .extensions.loader import discover_extensions
+        from .extensions.runner import ExtensionRunner
+        from pi_agent.types import AgentTool, AgentToolResult
+        from pi_ai.types import TextContent
+
+        try:
+            exts = discover_extensions()
+        except Exception as e:
+            logger.warning("扩展发现失败: {}", e)
+            exts = []
+
+        logger.info("加载了 {} 个扩展", len(exts))
+
+        tools: list = []
+        for ext in exts:
+            for tool_name, tool_def in (getattr(ext, "tools", {}) or {}).items():
+                exec_fn = getattr(tool_def, "execute", None)
+                if exec_fn is None:
+                    continue
+
+                async def _wrapper(tc_id, params, signal, on_update, _fn=exec_fn):
+                    try:
+                        result = await _fn(params)
+                        content_list = [
+                            TextContent(type="text", text=item["text"])
+                            for item in result.get("content", [])
+                            if item.get("type") == "text"
+                        ]
+                        return AgentToolResult(content=content_list, details=result.get("details"))
+                    except Exception as e:
+                        return AgentToolResult(
+                            content=[TextContent(type="text", text=str(e))],
+                            details={"is_error": True},
+                        )
+
+                tools.append(AgentTool(
+                    name=tool_name,
+                    label=getattr(tool_def, "label", tool_name),
+                    description=getattr(tool_def, "description", tool_name),
+                    parameters=getattr(tool_def, "parameters", {}),
+                    execute=_wrapper,
+                ))
+
+        runner = ExtensionRunner(exts, cwd=cwd)
+        logger.debug("扩展工具加载完成: tools={}, ext_count={}", len(tools), len(exts))
+        return tools, runner
+
+    async def sync_from_commit(
+        self,
+        changed_files: list[str],
+        commit_message: str,
+        diff: str,
+        *,
+        dry_run: bool = False,
+    ) -> SyncResult:
+        """Analyze a commit and update affected wiki sections.
+
+        Applies filters from .wiki/filter.json before processing.
+        """
+        from ..filter import FilterManager
+        fm = FilterManager(self._wiki_project_root)
+
+        if fm.should_skip_commit(changed_files, commit_message):
+            logger.info("提交被过滤规则跳过: message={}", commit_message[:80])
+            return SyncResult(commit_files=list(changed_files), affected={}, dry_run=dry_run)
+
+        filtered_files = fm.filter_files(changed_files)
+        if not filtered_files:
+            logger.info("所有文件被过滤，无文件需处理: {}", changed_files)
+            return SyncResult(commit_files=list(changed_files), affected={}, dry_run=dry_run)
+
+        affected = self._indexer.get_affected_sections(filtered_files)
+        logger.info("受影响的 wiki 章节: {} 个页面", len(affected))
+
+        if not affected:
+            logger.info("未找到受影响的 wiki 章节: files={}", filtered_files)
+            return SyncResult(
+                commit_files=list(changed_files),
+                affected={},
+                wiki_pages_modified=list(affected.keys()),
+                dry_run=dry_run,
+            )
+
+        if dry_run:
+            logger.info("dry_run 模式，跳过实际更新: pages={}", list(affected.keys()))
+            return SyncResult(
+                commit_files=list(changed_files),
+                affected=affected,
+                wiki_pages_modified=list(affected.keys()),
+                dry_run=True,
+            )
+
+        # Tell the wiki guard which pages the agent is allowed to edit
+        self._wiki_tool_guard.set_allowed_pages(set(affected.keys()))
+
+        prompt = build_commit_prompt(changed_files, commit_message, diff, affected)
+        logger.info("发送 prompt 到模型，长度 {} 字符", len(prompt))
+        try:
+            await self.prompt(prompt)
+        finally:
+            self._wiki_tool_guard.set_allowed_pages(set())
+            logger.debug("已清空允许修改页面列表")
+
+        return SyncResult(
+            commit_files=list(changed_files),
+            affected=affected,
+            wiki_pages_modified=list(affected.keys()),
+            session_id=getattr(self, "session_id", ""),
+        )
+
+    async def close(self) -> None:
+        """Reset the underlying agent session."""
+        try:
+            self.dispose()
+        except Exception:
+            pass
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

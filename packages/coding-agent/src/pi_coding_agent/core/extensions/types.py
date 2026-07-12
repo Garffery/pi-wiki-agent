@@ -289,11 +289,13 @@ class ExtensionContext:
         session_id: str = "",
         model: Any = None,
         messages: list[Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.cwd = cwd
         self.session_id = session_id
         self.model = model
         self.messages = messages or []
+        self.metadata = metadata or {}
 
 
 class ExtensionAPI:

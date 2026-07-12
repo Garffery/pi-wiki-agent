@@ -358,7 +358,6 @@ async def _run(args: Sequence[str]) -> int:
             )
         except Exception:
             pass
-
     opts = CreateAgentSessionOptions(
         cwd=cwd,
         model=model,
