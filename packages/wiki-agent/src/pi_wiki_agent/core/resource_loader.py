@@ -213,3 +213,61 @@ class ResourceLoader:
         else:
             expanded = t
         return os.path.abspath(os.path.join(self._cwd, expanded))
+
+
+def _build_extension_tools(extensions: list[Any]) -> tuple[list[Any], Any]:
+    """Convert loaded coding-agent Extension objects to AgentTool instances + runner.
+
+    Called by the desktop app startup to transform extension ToolDefinitions into
+    AgentTool objects that WikiSession can consume.
+    """
+    from pi_agent.types import AgentTool, AgentToolResult
+    from pi_ai.types import TextContent
+    from .extensions.runner import ExtensionRunner
+
+    # Build wiki-agent Extension wrappers from coding-agent extensions
+    from .extensions.types import Extension as WikiExtension
+    wiki_exts: list[WikiExtension] = []
+    for ext in extensions:
+        w = WikiExtension(
+            resolved_path=getattr(ext, "resolved_path", getattr(ext, "path", "")),
+            handlers=getattr(ext, "handlers", {}),
+            tools=getattr(ext, "tools", {}),
+            commands=getattr(ext, "commands", {}),
+        )
+        wiki_exts.append(w)
+
+    runner = ExtensionRunner(wiki_exts)
+
+    tools: list[AgentTool] = []
+    for ext in extensions:
+        ext_tools: dict = getattr(ext, "tools", {}) or {}
+        for tool_name, tool_def in ext_tools.items():
+            exec_fn = getattr(tool_def, "execute", None)
+            if exec_fn is None:
+                continue
+
+            async def _wrapper(tc_id, params, signal, on_update, _fn=exec_fn):
+                try:
+                    result = await _fn(params)
+                    content_list = [
+                        TextContent(type="text", text=item["text"])
+                        for item in result.get("content", [])
+                        if item.get("type") == "text"
+                    ]
+                    return AgentToolResult(content=content_list, details=result.get("details"))
+                except Exception as e:
+                    return AgentToolResult(
+                        content=[TextContent(type="text", text=str(e))],
+                        details={"is_error": True},
+                    )
+
+            tools.append(AgentTool(
+                name=tool_name,
+                label=getattr(tool_def, "label", tool_name),
+                description=getattr(tool_def, "description", tool_name),
+                parameters=getattr(tool_def, "parameters", {}),
+                execute=_wrapper,
+            ))
+
+    return tools, runner

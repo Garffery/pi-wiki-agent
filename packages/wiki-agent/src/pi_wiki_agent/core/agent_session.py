@@ -125,19 +125,6 @@ class WikiSession:
 
         self._indexer = WikiIndexer(project_root)
 
-        # ── Load extensions (wiki-specific pipeline) ─────────────────────────
-        extension_tools: list[Any] = []
-        if extension_runner is None:
-            extension_tools, extension_runner = self._load_extensions(cwd=str(project_root))
-
-        if extra_tools and extension_tools:
-            extra_tools = list(extra_tools) + extension_tools
-        elif extension_tools:
-            extra_tools = extension_tools
-
-        # Capture extension tool names before building
-        self._extension_tool_names = [t.name for t in extension_tools]
-
         # ── Standard AgentSession init ───────────────────────────────────────
         self._settings = settings or Settings()
         self._auth_storage = auth_storage or AuthStorage()
@@ -151,7 +138,7 @@ class WikiSession:
 
         self.session_id = self._session_manager.get_session_id()
 
-        # Store extension runner for hook dispatch
+        # Store extension runner (API compat — external callers may pass one)
         self._extension_runner = extension_runner
 
         # Build all tools; keep registry for set_active_tools_by_name
@@ -162,7 +149,7 @@ class WikiSession:
         self._wiki_tool_guard = WikiToolGuard(cwd=self.cwd)
         self._all_tools = wrap_tools_with_wiki_guards(self._all_tools, self._wiki_tool_guard)
 
-        # ── Wrap tools with extension event dispatch ──────────────────────
+        # ── Extension event dispatch (only when an external runner is passed) ──
         if self._extension_runner:
             from .extensions.wrapper import wrap_tools_with_extensions
             self._all_tools = wrap_tools_with_extensions(self._all_tools, self._extension_runner)
@@ -239,7 +226,7 @@ class WikiSession:
         self._scoped_models: list[dict[str, Model | ThinkingLevel | None]] | None = None
 
         # ── Restrict active tools to wiki subset ─────────────────────────────
-        active_tool_names = list(WIKI_TOOLS) + self._extension_tool_names
+        active_tool_names = list(WIKI_TOOLS)
         self.set_active_tools_by_name(active_tool_names)
         logger.info("可用工具: {}", active_tool_names)
 
@@ -1395,56 +1382,6 @@ class WikiSession:
     @property
     def indexer(self) -> WikiIndexer:
         return self._indexer
-
-    @staticmethod
-    def _load_extensions(cwd: str = "") -> tuple[list, Any]:
-        """Discover and load extensions using wiki-agent's extension system."""
-        from .extensions.loader import discover_extensions
-        from .extensions.runner import ExtensionRunner
-        from pi_agent.types import AgentTool, AgentToolResult
-        from pi_ai.types import TextContent
-
-        try:
-            exts = discover_extensions()
-        except Exception as e:
-            logger.warning("扩展发现失败: {}", e)
-            exts = []
-
-        logger.info("加载了 {} 个扩展", len(exts))
-
-        tools: list = []
-        for ext in exts:
-            for tool_name, tool_def in (getattr(ext, "tools", {}) or {}).items():
-                exec_fn = getattr(tool_def, "execute", None)
-                if exec_fn is None:
-                    continue
-
-                async def _wrapper(tc_id, params, signal, on_update, _fn=exec_fn):
-                    try:
-                        result = await _fn(params)
-                        content_list = [
-                            TextContent(type="text", text=item["text"])
-                            for item in result.get("content", [])
-                            if item.get("type") == "text"
-                        ]
-                        return AgentToolResult(content=content_list, details=result.get("details"))
-                    except Exception as e:
-                        return AgentToolResult(
-                            content=[TextContent(type="text", text=str(e))],
-                            details={"is_error": True},
-                        )
-
-                tools.append(AgentTool(
-                    name=tool_name,
-                    label=getattr(tool_def, "label", tool_name),
-                    description=getattr(tool_def, "description", tool_name),
-                    parameters=getattr(tool_def, "parameters", {}),
-                    execute=_wrapper,
-                ))
-
-        runner = ExtensionRunner(exts, cwd=cwd)
-        logger.debug("扩展工具加载完成: tools={}, ext_count={}", len(tools), len(exts))
-        return tools, runner
 
     async def sync_from_commit(
         self,

@@ -12,8 +12,7 @@ from ...logging import logger
 from .types import Extension, ToolDefinition
 
 _EXTENSION_PATHS = [
-    os.path.join(os.path.expanduser("~"), ".pi", "agent", "extensions"),
-    ".pi/extensions",
+    os.path.join(os.path.expanduser("~"), ".pi-wiki-agent", "extensions"),
 ]
 
 
