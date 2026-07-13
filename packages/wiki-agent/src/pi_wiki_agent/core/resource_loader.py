@@ -28,7 +28,7 @@ def _load_context_file_from_dir(dir_path: str) -> dict[str, str] | None:
 
 
 def _load_project_context_files(cwd: str | None = None, agent_dir: str | None = None) -> list[dict[str, str]]:
-    from pi_coding_agent.config import get_agent_dir
+    from ..config import get_agent_dir
 
     resolved_cwd = cwd or os.getcwd()
     resolved_agent_dir = agent_dir or get_agent_dir()
@@ -82,7 +82,7 @@ class ResourceLoader:
     """
 
     def __init__(self, options: ResourceLoaderOptions | None = None) -> None:
-        from pi_coding_agent.config import CONFIG_DIR_NAME, get_agent_dir
+        from ..config import CONFIG_DIR_NAME, get_agent_dir
 
         opts = options or ResourceLoaderOptions()
         self._cwd = opts.cwd or os.getcwd()
@@ -115,40 +115,30 @@ class ResourceLoader:
 
     # ── Reload ────────────────────────────────────────────────────────────────
 
-    async def reload(self) -> None:
-        """Reload all resources from disk."""
-        # Load extensions
+    def reload(self) -> None:
+        """Reload all resources from disk (sync — all file I/O)."""
         if not self._no_extensions:
-            await self._load_extensions()
+            self._load_extensions()
 
-        # Load skills
         skill_paths = self._resolve_resource_paths_from_settings("skills") + self._additional_skill_paths
         merged_skill_paths = self._merge_paths([], skill_paths)
         self._last_skill_paths = merged_skill_paths
         self._update_skills_from_paths(merged_skill_paths)
 
-        # Load AGENTS.md / CLAUDE.md context files
         self._agents_files = _load_project_context_files(self._cwd, self._agent_dir)
 
     # ── Extension loading ─────────────────────────────────────────────────────
 
-    async def _load_extensions(self) -> None:
+    def _load_extensions(self) -> None:
+        """Load extensions using wiki-agent's own sync discoverer (no async needed — file I/O only)."""
         ext_paths = self._resolve_resource_paths_from_settings("extensions") + self._additional_extension_paths
 
-        if not ext_paths:
-            self._extensions_result = {"extensions": [], "diagnostics": []}
-        else:
-            try:
-                from pi_coding_agent.core.extensions.loader import load_extensions
-                from pi_coding_agent.core.event_bus import create_event_bus
-                event_bus = create_event_bus()
-                base_result = await load_extensions(ext_paths, self._cwd, event_bus)
-                self._extensions_result = {
-                    "extensions": base_result.extensions,
-                    "diagnostics": base_result.errors,
-                }
-            except Exception as e:
-                self._extensions_result = {"extensions": [], "diagnostics": [{"type": "error", "message": str(e)}]}
+        try:
+            from .extensions.loader import discover_extensions
+            exts = discover_extensions(list(ext_paths) if ext_paths else None)
+            self._extensions_result = {"extensions": exts, "diagnostics": []}
+        except Exception as e:
+            self._extensions_result = {"extensions": [], "diagnostics": [{"type": "error", "message": str(e)}]}
 
     # ── Skills ────────────────────────────────────────────────────────────────
 

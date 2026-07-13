@@ -15,8 +15,13 @@ class SessionManager(_BaseSessionManager):
     """
 
     @classmethod
-    def create(cls, cwd: str | None = None) -> SessionManager:
-        base = _BaseSessionManager.create(cwd=cwd)
+    def create(
+        cls,
+        cwd: str,
+        session_dir: str | None = None,
+        parent_session: str | None = None,
+    ) -> SessionManager:
+        base = _BaseSessionManager.create(cwd=cwd, session_dir=session_dir, parent_session=parent_session)
         base.__class__ = cls
         return base
 

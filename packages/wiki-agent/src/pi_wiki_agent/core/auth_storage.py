@@ -49,8 +49,9 @@ class AuthStorage:
         if provider in self._runtime_overrides:
             return self._runtime_overrides[provider]
         self._ensure_loaded()
-        stored = self._data.get(provider, {})
-        if isinstance(stored, dict):
-            return stored.get("api_key")
+        # Match coding-agent auth format: {"api_keys": {"deepseek": "sk-xxx"}}
+        key = self._data.get("api_keys", {}).get(provider)
+        if key:
+            return key
         from pi_ai.env_api_keys import get_env_api_key
         return get_env_api_key(provider)

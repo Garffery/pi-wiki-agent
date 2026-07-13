@@ -342,7 +342,9 @@ class SessionManager:
     @staticmethod
     def _resolve_sessions_dir(cwd: str, session_dir: str | None = None) -> str:
         if session_dir:
-            return os.path.abspath(session_dir)
+            resolved = os.path.abspath(session_dir)
+            os.makedirs(resolved, exist_ok=True)
+            return resolved
         safe = f"--{cwd.lstrip('/').lstrip(os.sep).replace('/', '-').replace(os.sep, '-').replace(':', '-')}--"
         base = os.path.join(os.path.expanduser("~"), ".pi", "agent", "sessions", safe)
         os.makedirs(base, exist_ok=True)

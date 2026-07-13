@@ -47,11 +47,13 @@ def _get_or_create_session(project_path: str, model: str | None = None) -> WikiS
     from dotenv import load_dotenv
     load_dotenv(Path.cwd() / ".env")
 
-    # Get pre-loaded extensions from app startup bootstrap
-    from .app import _get_resource_store
-    store = _get_resource_store()
+    # Get pre-loaded resources from shared module
+    from .resources import get_resource_store
+    store = get_resource_store()
     extra_tools = store.get("extension_tools", [])
     extension_runner = store.get("extension_runner")
+    skills = store.get("skills", [])
+    context_files = store.get("agents_files", [])
 
     if model and ":" in model:
         provider, model_id = model.split(":", 1)
@@ -59,11 +61,13 @@ def _get_or_create_session(project_path: str, model: str | None = None) -> WikiS
         try:
             ai_model = registry.resolve_model(model_id=model_id, provider=provider)
             return WikiSession(project_path, model=ai_model,
-                               extra_tools=extra_tools, extension_runner=extension_runner)
+                               extra_tools=extra_tools, extension_runner=extension_runner,
+                               skills=skills, context_files=context_files)
         except Exception:
             pass  # fall through to default
 
-    return WikiSession(project_path, extra_tools=extra_tools, extension_runner=extension_runner)
+    return WikiSession(project_path, extra_tools=extra_tools, extension_runner=extension_runner,
+                       skills=skills, context_files=context_files)
 
 
 def _commit_to_summary(c: CommitInfo) -> CommitSummary:

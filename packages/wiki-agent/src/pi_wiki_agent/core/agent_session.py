@@ -32,12 +32,12 @@ from ..indexer import WikiIndexer
 from ..metadata import IndexEntry
 from ..prompt import WIKI_SYSTEM_PROMPT, build_commit_prompt
 
-from pi_coding_agent.core.auth_storage import AuthStorage
+from .auth_storage import AuthStorage
+from .model_registry import ModelRegistry
+from .session_manager import SessionManager
+from .settings_manager import Settings, SettingsManager
 from pi_coding_agent.core.compaction import compact_context, should_compact
 from pi_coding_agent.core.messages import wrap_convert_to_llm
-from pi_coding_agent.core.model_registry import ModelRegistry
-from pi_coding_agent.core.session_manager import SessionManager
-from pi_coding_agent.core.settings_manager import Settings, SettingsManager
 from pi_coding_agent.core.tools import (
     create_bash_tool,
     create_edit_tool,
@@ -108,6 +108,8 @@ class WikiSession:
         settings_manager: SettingsManager | None = None,
         extra_tools: list[AgentTool] | None = None,
         extension_runner: Any = None,
+        skills: list[Any] | None = None,
+        context_files: list[dict[str, str]] | None = None,
     ) -> None:
         self._wiki_project_root = Path(project_root)
         self.cwd = str(project_root)
@@ -129,12 +131,16 @@ class WikiSession:
         self._settings = settings or Settings()
         self._auth_storage = auth_storage or AuthStorage()
         self._model_registry = model_registry or ModelRegistry()
-        self._settings_manager = settings_manager or SettingsManager.create(cwd=self.cwd)
+        # Settings live in wiki-agent's own config dir, not in managed project
+        self._settings_manager = settings_manager or SettingsManager.create()
 
         if session_manager is not None:
             self._session_manager = session_manager
         else:
-            self._session_manager = SessionManager.create(cwd=self.cwd)
+            # Sessions live in wiki-agent's own sessions dir, not in managed project
+            from ..config import get_agent_dir
+            _wiki_sessions_dir = os.path.join(get_agent_dir(), "sessions")
+            self._session_manager = SessionManager.create(cwd=self.cwd, session_dir=_wiki_sessions_dir)
 
         self.session_id = self._session_manager.get_session_id()
 
@@ -160,32 +166,15 @@ class WikiSession:
         # Resolve model
         resolved_model = model or self._resolve_default_model()
 
-        # ── Resource loader (skills + context files, mirroring coding-agent) ─
-        from .resource_loader import ResourceLoader, ResourceLoaderOptions, _load_project_context_files
-        self._resource_loader = ResourceLoader(
-            ResourceLoaderOptions(cwd=self.cwd, settings_manager=self._settings_manager)
-        )
-        # Load skills synchronously (file I/O, no async needed)
-        self._resource_loader._update_skills_from_paths(
-            self._resource_loader._resolve_resource_paths_from_settings("skills")
-            + self._resource_loader._additional_skill_paths
-        )
-        skills_data = self._resource_loader.get_skills()
-        logger.info("已加载 {} 个技能", len(skills_data.get("skills", [])))
-
-        # Load context files (AGENTS.md / CLAUDE.md)
-        context_files = _load_project_context_files(self.cwd)
-        logger.info("已加载 {} 个上下文文件", len(context_files))
-
-        # Build system prompt with context + skills appended
+        # Build system prompt (skills + context files pre-loaded by caller)
         self._base_system_prompt = WIKI_SYSTEM_PROMPT
         if context_files:
             self._base_system_prompt += "\n\n# Project Context\n\n"
             for cf in context_files:
                 self._base_system_prompt += f"## {cf['path']}\n\n{cf['content']}\n\n"
-        from .skills import format_skills_for_prompt
-        if skills_data["skills"]:
-            self._base_system_prompt += format_skills_for_prompt(skills_data["skills"])
+        if skills:
+            from .skills import format_skills_for_prompt
+            self._base_system_prompt += format_skills_for_prompt(skills)
 
         # Create convertToLlm wrapper with blockImages support
         convert_to_llm_fn = wrap_convert_to_llm(self._settings_manager.get_block_images())

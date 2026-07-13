@@ -258,7 +258,7 @@ class LoadSkillsOptions:
 
 def load_skills(options: LoadSkillsOptions | None = None) -> LoadSkillsResult:
     """Load skills from all configured locations."""
-    from pi_coding_agent.config import CONFIG_DIR_NAME, get_agent_dir
+    from ..config import CONFIG_DIR_NAME, get_agent_dir
 
     opts = options or LoadSkillsOptions()
     cwd = opts.cwd or os.getcwd()

@@ -10,6 +10,9 @@ from typing import Any
 
 from pi_coding_agent.core.settings_manager import SettingsManager as _BaseSettingsManager, Settings as _BaseSettings
 
+# Re-export for direct use by WikiSession
+Settings = _BaseSettings
+
 
 @dataclass
 class WikiSettings:
