@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import asyncio
@@ -9,7 +10,9 @@ import json
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from loguru import logger
 from pi_wiki_agent import WikiSession
+from pi_wiki_agent.core.settings_manager import Settings
 from pi_wiki_agent.vcs import CommitInfo, create_monitor
 
 from .config import add_project, load_projects, remove_project
@@ -31,6 +34,28 @@ from .models import (
 router = APIRouter(prefix="/api")
 
 
+@dataclass
+class WikiSessionOptions:
+    """Options for creating a WikiSession.
+
+    Mirrors CreateAgentSessionOptions in pi_coding_agent.core.sdk.
+    Model selection is encoded as Settings — WikiSession resolves internally.
+    """
+    # Project root path (required)
+    project_path: str
+    # Model selection via Settings; WikiSession resolves the actual Model internally
+    settings: Settings | None = None
+
+    @staticmethod
+    def from_model_str(project_path: str, model_str: str | None = None) -> WikiSessionOptions:
+        """Parse a model string 'provider:model_id' into Settings."""
+        settings = None
+        if model_str and ":" in model_str:
+            provider, model_id = model_str.split(":", 1)
+            settings = Settings(model_id=model_id, provider=provider)
+        return WikiSessionOptions(project_path=project_path, settings=settings)
+
+
 _registry: WikiModelRegistry | None = None
 
 
@@ -42,12 +67,20 @@ def _get_registry() -> WikiModelRegistry:
     return _registry
 
 
-def _get_or_create_session(project_path: str, model: str | None = None) -> WikiSession:
-    """Create a WikiSession, optionally with a specific model (format: 'provider:model_id')."""
+def _get_or_create_session(options: WikiSessionOptions) -> WikiSession:
+    """Create a WikiSession from options.
+
+    Follows the same pattern as create_agent_session in pi_coding_agent.core.sdk:
+    build dependencies → load resources → create session.
+    Model resolution is delegated to WikiSession via Settings.
+    """
     from dotenv import load_dotenv
     load_dotenv(Path.cwd() / ".env")
 
-    # Get pre-loaded resources from shared module
+    # ── Build shared dependencies ──
+    registry = _get_registry()
+
+    # ── Get pre-loaded resources ──
     from .resources import get_resource_store
     store = get_resource_store()
     extra_tools = store.get("extension_tools", [])
@@ -55,19 +88,16 @@ def _get_or_create_session(project_path: str, model: str | None = None) -> WikiS
     skills = store.get("skills", [])
     context_files = store.get("agents_files", [])
 
-    if model and ":" in model:
-        provider, model_id = model.split(":", 1)
-        registry = _get_registry()
-        try:
-            ai_model = registry.resolve_model(model_id=model_id, provider=provider)
-            return WikiSession(project_path, model=ai_model,
-                               extra_tools=extra_tools, extension_runner=extension_runner,
-                               skills=skills, context_files=context_files)
-        except Exception:
-            pass  # fall through to default
-
-    return WikiSession(project_path, extra_tools=extra_tools, extension_runner=extension_runner,
-                       skills=skills, context_files=context_files)
+    return WikiSession(
+        options.project_path,
+        model=None,
+        settings=options.settings,
+        model_registry=registry,
+        extra_tools=extra_tools,
+        extension_runner=extension_runner,
+        skills=skills,
+        context_files=context_files,
+    )
 
 
 def _commit_to_summary(c: CommitInfo) -> CommitSummary:
@@ -170,7 +200,7 @@ async def get_commit_detail(name: str, rev: str):
         raise HTTPException(404, f"项目不存在: {name}")
     monitor = create_monitor(cfg["path"])
     commit = await monitor.get_commit(rev)
-    ws = _get_or_create_session(cfg["path"])
+    ws = _get_or_create_session(WikiSessionOptions(project_path=cfg["path"]))
     result = await ws.sync_from_commit(
         changed_files=commit.files,
         commit_message=commit.message,
@@ -276,7 +306,7 @@ async def sync_commit(name: str, rev: str, body: SyncRequest | None = None):
     monitor = create_monitor(cfg["path"])
     commit = await monitor.get_commit(rev)
 
-    ws = _get_or_create_session(cfg["path"], model=body.model if body else None)
+    ws = _get_or_create_session(WikiSessionOptions.from_model_str(cfg["path"], body.model if body else None))
     try:
         result = await ws.sync_from_commit(
             changed_files=commit.files,
@@ -306,7 +336,7 @@ async def sync_commit_stream(name: str, rev: str, body: SyncRequest | None = Non
         raise HTTPException(404, f"项目不存在: {name}")
     monitor = create_monitor(cfg["path"])
     commit = await monitor.get_commit(rev)
-    ws = _get_or_create_session(cfg["path"], model=body.model if body else None)
+    ws = _get_or_create_session(WikiSessionOptions.from_model_str(cfg["path"], body.model if body else None))
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -374,7 +404,7 @@ async def sync_all_commits(name: str, body: SyncRequest | None = None):
     monitor = create_monitor(cfg["path"])
     commits = await monitor.poll()
 
-    ws = _get_or_create_session(cfg["path"], model=body.model if body else None)
+    ws = _get_or_create_session(WikiSessionOptions.from_model_str(cfg["path"], body.model if body else None))
     results: list[SyncResult] = []
     for c in commits:
         try:

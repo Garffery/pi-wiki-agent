@@ -166,6 +166,8 @@ class WikiSession:
         # Resolve model
         resolved_model = model or self._resolve_default_model()
 
+        logger.info("=======>获得对应的模型:{}", resolved_model)
+
         # Build system prompt (skills + context files pre-loaded by caller)
         self._base_system_prompt = WIKI_SYSTEM_PROMPT
         if context_files:
@@ -241,6 +243,8 @@ class WikiSession:
     def _resolve_default_model(self) -> Model:
         """Resolve the default model from settings."""
         try:
+            logger.info("model:{}",self._settings.model_id)
+            logger.info("provider:{}", self._settings.provider)
             resolved = self._model_registry.resolve_model(
                 model_id=self._settings.model_id,
                 provider=self._settings.provider,
