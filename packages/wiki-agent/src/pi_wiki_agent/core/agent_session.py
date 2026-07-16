@@ -152,8 +152,12 @@ class WikiSession:
 
         # ── Wiki tool guard (built-in, always active) ─────────────────────
         from .extensions.wiki_tool_wrapper import WikiToolGuard, wrap_tools_with_wiki_guards
+        from .extensions.light_guard import LightGuard
         self._wiki_tool_guard = WikiToolGuard(cwd=self.cwd)
-        self._all_tools = wrap_tools_with_wiki_guards(self._all_tools, self._wiki_tool_guard)
+        self._light_guard = LightGuard()
+        self._all_tools = wrap_tools_with_wiki_guards(
+            self._all_tools, self._wiki_tool_guard, self._light_guard
+        )
 
         # ── Extension event dispatch (only when an external runner is passed) ──
         if self._extension_runner:
@@ -212,6 +216,11 @@ class WikiSession:
         # ── Bash execution state ──────────────────────────────────────────────
         self._pending_bash_messages: list[AgentMessage] = []
         self._pending_next_turn_messages: list[AgentMessage] = []
+
+        # ── Wiki structure validation state ────────────────────────────────────
+        self._pending_tool_args: dict[str, dict] = {}   # {tool_call_id: args}
+        self._modified_pages_this_turn: set[str] = set()
+        self._wiki_validation_done: bool = False         # guard against infinite fix loop
 
         # ── Scoped models (for cycling) ───────────────────────────────────────
         self._scoped_models: list[dict[str, Model | ThinkingLevel | None]] | None = None
@@ -287,8 +296,23 @@ class WikiSession:
     # ── Event handling ────────────────────────────────────────────────────────
 
     def _on_agent_event(self, event: AgentEvent) -> None:
-        """Handle agent events — persist messages and notify listeners."""
-        # ── 2a: Persist messages on message_end (not agent_end) ──────────────
+        """Handle agent events — persist messages, collect modified pages, and notify listeners."""
+        # ── Collect modified wiki pages ────────────────────────────────────
+        if event.type == "tool_execution_start":
+            if event.tool_name in ("edit", "write"):
+                self._pending_tool_args[event.tool_call_id] = event.args
+
+        if event.type == "tool_execution_end":
+            if not event.is_error and event.tool_name in ("edit", "write"):
+                args = self._pending_tool_args.pop(event.tool_call_id, None)
+                if args:
+                    file_path = args.get("file_path") or args.get("path", "")
+                    if file_path:
+                        page = self._resolve_wiki_page(file_path)
+                        if page:
+                            self._modified_pages_this_turn.add(page)
+
+        # ── Persist messages on message_end (not agent_end) ──────────────────
         if event.type == "message_end":
             msg = getattr(event, "message", None)
             if msg is not None:
@@ -335,6 +359,10 @@ class WikiSession:
             if did_retry:
                 return
         await self._check_compaction(msg)
+        # ── Wiki structure validation ───────────────────────────────────
+        await self._validate_modified_pages()
+        self._modified_pages_this_turn.clear()
+        self._pending_tool_args.clear()
 
     def _emit(self, event: dict | Any) -> None:
         """Emit a synthetic session event to all listeners."""
@@ -343,6 +371,88 @@ class WikiSession:
                 listener(event)
             except Exception:
                 pass
+
+    # ── Wiki helpers ──────────────────────────────────────────────────────────
+
+    def _resolve_wiki_page(self, file_path: str) -> str | None:
+        """将工具参数中的路径解析为 .wiki 下的相对页面名。非 wiki 页返回 None。"""
+        p = Path(file_path)
+        if not p.is_absolute():
+            p = Path(self.cwd) / file_path
+        wiki_root = Path(self.cwd) / ".wiki"
+        try:
+            rel = str(p.relative_to(wiki_root)).replace("\\", "/")
+            return rel if rel.endswith(".md") else None
+        except ValueError:
+            return None
+
+    async def _validate_modified_pages(self) -> None:
+        """Run wiki structure validation on all pages modified this turn.
+
+        Auto-fixes are logged silently. LLM-level issues trigger a fix prompt
+        that re-wakes the agent.
+        """
+        if not self._modified_pages_this_turn:
+            return
+        if self._wiki_validation_done:
+            return  # already attempted a fix this turn, don't loop
+
+        from ..metadata import WikiMetadata
+        from .structure_validator import WikiStructureValidator
+
+        wiki_root = Path(self.cwd) / ".wiki"
+        metadata = WikiMetadata(wiki_root)
+        validator = WikiStructureValidator(wiki_root, metadata)
+
+        all_llm_issues: list[str] = []
+
+        for page_path in sorted(self._modified_pages_this_turn):
+            result = validator.validate_and_fix(page_path)
+            for fix in result.auto_fixed:
+                logger.info("wiki 结构自动修复 [{}]: {}", page_path, fix)
+            if result.needs_llm:
+                issues_block = "\n".join(
+                    f"{j+1}. {issue}" for j, issue in enumerate(result.needs_llm)
+                )
+                all_llm_issues.append(f"### {page_path}\n{issues_block}")
+
+        if all_llm_issues:
+            self._wiki_validation_done = True
+            prompt_text = self._build_fix_prompt(all_llm_issues)
+            logger.warning("wiki 结构校验发现问题，唤醒 LLM 修复: {}", all_llm_issues)
+
+            # Inject fix prompt as a user message into the conversation
+            from pi_ai.types import UserMessage, TextContent
+            user_msg = UserMessage(
+                role="user",
+                content=[TextContent(type="text", text=prompt_text)],
+                timestamp=int(time.time() * 1000),
+            )
+            self._session_manager.append_message(user_msg.model_dump())
+            self._agent.state.messages.append(user_msg)
+
+            # Schedule continue via call_soon (same pattern as retry/compaction)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_soon(lambda: asyncio.ensure_future(
+                    self._agent.continue_from_context()
+                ))
+            except RuntimeError:
+                pass
+
+    @staticmethod
+    def _build_fix_prompt(issues: list[str]) -> str:
+        """Build a fix prompt from validation issues for LLM consumption."""
+        parts = [
+            "## Wiki Guard 检查结果",
+            "",
+            "上一轮修改完成后，以下 wiki 页面存在结构问题，需要你修复：",
+            "",
+        ]
+        parts.extend(issues)
+        parts.append("")
+        parts.append("请逐一修复上述问题，使用 edit 工具精确修改对应位置。")
+        return "\n".join(parts)
 
     # ── Subscription ──────────────────────────────────────────────────────────
 
@@ -401,6 +511,11 @@ class WikiSession:
 
         # Reset overflow recovery flag for each new user-initiated turn
         self._overflow_recovery_attempted = False
+
+        # Reset wiki page tracking for new turn
+        self._modified_pages_this_turn.clear()
+        self._pending_tool_args.clear()
+        self._wiki_validation_done = False
 
         # Flush pending bash messages
         self._flush_pending_bash_messages()

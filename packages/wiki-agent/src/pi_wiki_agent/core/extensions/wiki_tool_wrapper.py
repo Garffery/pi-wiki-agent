@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ...logging import logger
+from .light_guard import LightGuard
 
 
 class WikiToolGuard:
@@ -51,7 +52,7 @@ class WikiToolGuard:
         if not self._allowed_wiki_pages:
             return None
 
-        file_path = params.get("path", "")
+        file_path = params.get("file_path") or params.get("path", "")
         if not file_path:
             return None
 
@@ -104,23 +105,42 @@ def _copy_tool(tool, **overrides):
     return tool.model_copy(update=overrides)
 
 
-def wrap_tool_with_wiki_guard(tool: dict[str, Any] | Any, guard: WikiToolGuard) -> dict[str, Any] | Any:
-    """Wrap a built-in tool with the wiki page edit guard.
+def wrap_tool_with_wiki_guard(
+    tool: dict[str, Any] | Any,
+    guard: WikiToolGuard,
+    light_guard: LightGuard | None = None,
+) -> dict[str, Any] | Any:
+    """Wrap a built-in tool with wiki page edit guards.
 
-    The guard's ``check_edit_allowed`` runs unconditionally before every tool call,
-    blocking edit/write operations that target unapproved wiki pages.
+    Two layers run unconditionally before every tool call:
+
+    1. **WikiToolGuard** (page-level) — blocks edit/write to unapproved wiki pages.
+    2. **LightGuard** (line-level) — blocks edit/write that would remove
+       WIKI_SECTION markers or source links from old_string.
     """
     original_execute = _tool_attr(tool, "execute")
     tool_name = _tool_attr(tool, "name")
 
     async def _guarded_execute(tool_call_id: str, params: dict, cancel_event=None, on_update=None):
+        # ── Layer 1: page-level guard ──────────────────────────────────────
         block_result = guard.check_edit_allowed(tool_name, params or {})
         if block_result and getattr(block_result, "block", False):
             raise RuntimeError(getattr(block_result, "reason", "Blocked by wiki guard"))
+
+        # ── Layer 2: line-level light guard ────────────────────────────────
+        if light_guard is not None:
+            light_error = light_guard.check_params(tool_name, params or {})
+            if light_error is not None:
+                raise RuntimeError(light_error)
+
         return await original_execute(tool_call_id, params, cancel_event, on_update)
 
     return _copy_tool(tool, execute=_guarded_execute)
 
 
-def wrap_tools_with_wiki_guards(tools: list[Any], guard: WikiToolGuard) -> list[Any]:
-    return [wrap_tool_with_wiki_guard(tool, guard) for tool in tools]
+def wrap_tools_with_wiki_guards(
+    tools: list[Any],
+    guard: WikiToolGuard,
+    light_guard: LightGuard | None = None,
+) -> list[Any]:
+    return [wrap_tool_with_wiki_guard(tool, guard, light_guard) for tool in tools]
