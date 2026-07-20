@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import router
+from .api.v1.router import router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from pi_coding_agent.core.auth_storage import AuthStorage
+    from .wiki_model_registry import WikiModelRegistry
+    app.state.model_registry = WikiModelRegistry(auth_storage=AuthStorage())
+    yield
+    app.state.model_registry = None
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="pi-wiki-desktop", version="0.1.0")
+    app = FastAPI(title="pi-wiki-desktop", version="0.1.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -20,6 +30,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Disable caching for frontend files during development ─────────────
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+
+    class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            # Add no-cache for all responses
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            return response
+
+    app.add_middleware(NoCacheStaticMiddleware)
 
     app.include_router(router)
 

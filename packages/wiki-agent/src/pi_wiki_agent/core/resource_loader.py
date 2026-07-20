@@ -130,13 +130,20 @@ class ResourceLoader:
     # ── Extension loading ─────────────────────────────────────────────────────
 
     def _load_extensions(self) -> None:
-        """Load extensions using wiki-agent's own sync discoverer (no async needed — file I/O only)."""
+        """Load extensions using wiki-agent's own sync discoverer."""
         ext_paths = self._resolve_resource_paths_from_settings("extensions") + self._additional_extension_paths
 
         try:
             from .extensions.loader import discover_extensions
-            exts = discover_extensions(list(ext_paths) if ext_paths else None)
-            self._extensions_result = {"extensions": exts, "diagnostics": []}
+            result = discover_extensions(
+                extra_paths=list(ext_paths) if ext_paths else None,
+                cwd=self._cwd,
+            )
+            diagnostics: list[dict] = [
+                {"type": "error", "message": f"{e['path']}: {e['error']}"}
+                for e in result.errors
+            ]
+            self._extensions_result = {"extensions": result.extensions, "diagnostics": diagnostics}
         except Exception as e:
             self._extensions_result = {"extensions": [], "diagnostics": [{"type": "error", "message": str(e)}]}
 

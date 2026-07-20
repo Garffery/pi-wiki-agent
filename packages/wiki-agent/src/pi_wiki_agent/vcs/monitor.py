@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re as _re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,20 +50,38 @@ class VCSMonitor(ABC):
 
     @abstractmethod
     async def poll(self) -> list[CommitInfo]:
-        """Return new commits since the last marked revision (diff not populated).
-
-        Used by the polling path. Returns an empty list if no new commits.
-        """
+        """Return new commits since the last marked revision (diff not populated)."""
         ...
 
     @abstractmethod
     async def get_commit(self, revision: str) -> CommitInfo:
-        """Fetch full details (including diff) for a single revision.
+        """Fetch full details (including diff) for a single revision."""
+        ...
 
-        Used by both the hook path (single commit) and the polling path
-        (iterate over poll() results to load diffs).
+    @abstractmethod
+    async def get_file_diff(self, revision: str, file_path: str) -> str:
+        """Return the diff for a single file in *revision*.
+
+        Each VCS produces per-file diffs using its native command.
         """
         ...
+
+    async def write_file_diffs(self, revision: str, files: list[str], output_dir: str) -> list[str]:
+        """Write per-file diffs for *revision* to *output_dir* via native VCS commands.
+
+        Returns the list of written filenames (``<safe_name>.diff``).
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        written: list[str] = []
+        for file_path in files:
+            chunk = await self.get_file_diff(revision, file_path)
+            if not chunk.strip():
+                continue
+            safe_name = _re.sub(r"[\\/:*?\"<>|]", "_", file_path) + ".diff"
+            with open(os.path.join(output_dir, safe_name), "w", encoding="utf-8") as f:
+                f.write(chunk)
+            written.append(safe_name)
+        return written
 
     async def mark_processed(self, revision: str) -> None:
         """Record a revision as processed so poll() skips it next time."""

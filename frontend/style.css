@@ -320,6 +320,15 @@ body {
 
 .modal-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .modal-header-row .modal-title { margin-bottom: 0; }
+
+.btn-close {
+  width: 28px; height: 28px; border: none; border-radius: 6px;
+  background: transparent; font-size: 20px; line-height: 1;
+  color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.btn-close:hover { background: var(--bg); color: var(--text); }
 .toggle-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .toggle-label input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
 
@@ -357,3 +366,87 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #D1D5DB; }
+
+/* ── Chain Toggle ───────────────────────────────────────────────────── */
+
+.chain-toggle {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--white);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.chain-toggle:hover { border-color: var(--primary); }
+
+/* ── Chain Steps ────────────────────────────────────────────────────── */
+
+.chain-steps {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.chain-step {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.chain-step.running {
+  border-color: #93C5FD;
+  background: #EFF6FF;
+}
+.chain-step.done {
+  border-color: #6EE7B7;
+  background: var(--success-bg);
+}
+.chain-step.error {
+  border-color: #FCA5A5;
+  background: var(--error-bg);
+}
+.step-status-icon {
+  font-size: 12px; width: 18px; text-align: center;
+}
+.chain-step.running .step-status-icon { color: #3B82F6; }
+.chain-step.done .step-status-icon { color: var(--primary); }
+.chain-step.error .step-status-icon { color: var(--error); }
+.step-name { flex: 1; font-weight: 500; }
+.step-progress { color: var(--text-secondary); font-size: 11px; }
+.step-state { font-size: 11px; }
+.chain-step.running .step-state { color: #3B82F6; }
+.chain-step.done .step-state { color: var(--primary); }
+.chain-step.error .step-state { color: var(--error); }
+
+/* ── Quality Check ──────────────────────────────────────────────────── */
+
+.quality-error { color: var(--error); font-weight: 500; }
+.quality-warn { color: #D97706; font-weight: 500; }
+
+.quality-issues {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 16px 16px;
+}
+
+.quality-issue {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px; border-radius: 6px;
+  font-size: 13px;
+}
+.quality-issue.q-error { background: var(--error-bg); }
+.quality-issue.q-warning { background: #FFFBEB; }
+.quality-issue.q-info { background: var(--bg); }
+
+.q-badge {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.q-badge-error { background: #FEE2E2; color: var(--error); }
+.q-badge-warning { background: #FEF3C7; color: #D97706; }
+.q-badge-info { background: #DBEAFE; color: #3B82F6; }
+
+.q-body { flex: 1; min-width: 0; }
+.q-page { font-weight: 500; word-break: break-all; }
+.q-section { color: var(--text-secondary); font-weight: 400; }
+.q-msg { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }

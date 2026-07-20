@@ -87,6 +87,17 @@ class FilterManager:
 
         return False
 
+    def is_path_excluded(self, file_path: str) -> bool:
+        """Return True if *file_path* is excluded by any path filter rule."""
+        cfg = self.config
+        if not cfg.enabled:
+            return False
+        for rule in cfg.rules:
+            if rule.type == "path":
+                if fnmatch.fnmatch(file_path, rule.pattern):
+                    return True
+        return False
+
     def filter_files(self, changed_files: list[str]) -> list[str]:
         """Return files that pass all path filters (i.e., files to keep).
 

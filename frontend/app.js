@@ -16,6 +16,8 @@ createApp({
       syncResult: null,
       streamText: '',
       streamTools: [],
+      useChain: true,
+      chainSteps: [],
       showAddProject: false,
       newProject: { name: '', path: '' },
       addError: '',
@@ -29,15 +31,42 @@ createApp({
       filterEnabled: true,
       newFilter: { type: 'path', pattern: '', description: '' },
       filterError: '',
+      checking: false,
+      qualityReport: null,
+      generating: false,
+      genProgress: [],
+      selectedProjectObj: null,
     }
   },
 
   async mounted() {
     await this.checkHealth()
     await Promise.all([this.loadProjects(), this.loadModels()])
+    document.addEventListener('keydown', this._onKeydown)
+  },
+
+  beforeUnmount() {
+    document.removeEventListener('keydown', this._onKeydown)
+  },
+
+  watch: {
+    showAddProject(val) {
+      if (val) {
+        this.$nextTick(() => {
+          const input = this.$el.querySelector('.modal-overlay input')
+          if (input) input.focus()
+        })
+      }
+    },
   },
 
   methods: {
+    _onKeydown(e) {
+      if (e.key === 'Escape' && this.showAddProject) {
+        this.closeAddProject()
+      }
+    },
+
     async checkHealth() {
       try { const r = await fetch(`${API}/health`); this.apiOnline = r.ok } catch { this.apiOnline = false }
     },
@@ -51,6 +80,8 @@ createApp({
 
     async selectProject(name) {
       this.selectedProject = name; this.selectedCommit = ''; this.commitDetail = null; this.syncResult = null
+      this.qualityReport = null; this.genProgress = []
+      this.selectedProjectObj = this.projects.find(p => p.name === name) || null
       this.currentView = 'commits'
       await Promise.all([this.refreshCommits(), this.loadFilters()])
     },
@@ -68,8 +99,16 @@ createApp({
     },
 
     async syncCommit(rev) {
-      this.syncing = true; this.syncResult = null; this.streamText = ''; this.streamTools = []
-      await this._syncStream(rev)
+      this.syncing = true; this.syncResult = null; this.streamText = ''; this.streamTools = []; this.chainSteps = []
+      this.streamText = '正在启动同步...\n'
+      console.log('[syncCommit] useChain:', this.useChain, 'rev:', rev)
+      if (this.useChain) {
+        console.log('[syncCommit] → CHAIN 模式 (chain-sync)')
+        await this._chainSyncStream(rev)
+      } else {
+        console.log('[syncCommit] → 单 Agent 模式 (sync)')
+        await this._syncStream(rev)
+      }
     },
 
     async syncAll() {
@@ -88,10 +127,13 @@ createApp({
       await this.loadProjects(); await this.refreshCommits()
     },
 
-    async _syncStream(rev) {
+    async _chainSyncStream(rev) {
+      this.streamText = '[CHAIN] 正在启动 diff-analyzer → wiki-planner → wiki-writer 链式同步...\n'
       const body = this.selectedModel ? JSON.stringify({ model: this.selectedModel }) : undefined
+      const url = `${API}/projects/${this.selectedProject}/chain-sync/${rev}/stream`
+      console.log('[chain] 请求:', url)
       try {
-        const r = await fetch(`${API}/projects/${this.selectedProject}/sync/${rev}/stream`, {
+        const r = await fetch(url, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
         })
         const reader = r.body.getReader()
@@ -106,6 +148,73 @@ createApp({
             if (line.startsWith('data: ')) {
               try {
                 const evt = JSON.parse(line.slice(6))
+                // ── Agent events (same format as single-agent stream) ──
+                if (evt.type === 'message_update' && evt.text) {
+                  this.streamText += evt.text
+                } else if (evt.type === 'tool_execution_start') {
+                  this.streamTools.push({ name: evt.tool, status: 'running', args: evt.args })
+                } else if (evt.type === 'tool_execution_end') {
+                  const t = this.streamTools.findLast(x => x.name === evt.tool && x.status === 'running')
+                  if (t) t.status = evt.is_error ? 'error' : 'done'
+                // ── Chain step events ──
+                } else if (evt.type === 'chain_step_start') {
+                  console.log('[chain] step_start:', evt.agent, evt.step_index + 1, '/', evt.data?.total)
+                  this.streamText = ''; this.streamTools = []  // Clear for new step
+                  this.chainSteps.push({ agent: evt.agent, status: 'running', step: evt.step_index + 1, total: evt.data?.total })
+                } else if (evt.type === 'chain_step_end') {
+                  console.log('[chain] step_end:', evt.agent, 'output preview:', evt.data?.output?.slice(0, 80))
+                  const s = this.chainSteps.findLast(x => x.agent === evt.agent && x.status === 'running')
+                  if (s) { s.status = 'done'; s.output = evt.data?.output }
+                } else if (evt.type === 'chain_step_error') {
+                  console.error('[chain] step_error:', evt.agent, evt.data?.error)
+                  const s = this.chainSteps.findLast(x => x.agent === evt.agent && x.status === 'running')
+                  if (s) { s.status = 'error'; s.error = evt.data?.error }
+                } else if (evt.type === 'chain_done') {
+                  console.log('[chain] done:', evt.success, 'error:', evt.error)
+                  this.syncResult = evt
+                  this.syncing = false
+                  if (evt.success) {
+                    this.selectedCommit = ''
+                    this.commitDetail = null
+                    await this.loadProjects()
+                    await this.refreshCommits()
+                  }
+                  return
+                }
+              } catch(_) {}
+            }
+          }
+        }
+      } catch (e) {
+        this.syncResult = { success: false, error: e.message }
+        this.syncing = false
+      }
+    },
+
+    async _syncStream(rev) {
+      this.streamText = '[单Agent] 正在同步...\n'
+      const body = this.selectedModel ? JSON.stringify({ model: this.selectedModel }) : undefined
+      const url = `${API}/projects/${this.selectedProject}/sync/${rev}/stream`
+      console.log('[single] 请求:', url)
+      try {
+        const r = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        })
+        const reader = r.body.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n'); buf = lines.pop()
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const evt = JSON.parse(line.slice(6))
+                if (evt.type !== 'chain_step_end' && evt.type !== 'chain_done') {
+                  console.log('[chain] SSE event:', evt.type, evt.type === 'agent_event' ? '' : JSON.stringify(evt).slice(0, 120))
+                }
                 if (evt.type === 'message_update' && evt.text) {
                   this.streamText += evt.text
                 } else if (evt.type === 'tool_execution_start') {
@@ -132,6 +241,11 @@ createApp({
         this.syncResult = { success: false, error: e.message }
         this.syncing = false
       }
+    },
+
+    closeAddProject() {
+      this.showAddProject = false
+      this.addError = ''
     },
 
     async addProject() {
@@ -218,6 +332,68 @@ createApp({
           body: JSON.stringify({ enabled: this.filterEnabled }),
         })
       } catch (e) { console.error(e) }
+    },
+
+    // ── Full Generation ───────────────────────────────────────────────
+    async generateWiki() {
+      this.generating = true; this.genProgress = []
+      const url = `${API}/projects/${this.selectedProject}/generate/stream`
+      const body = this.selectedModel ? JSON.stringify({ model: this.selectedModel }) : undefined
+      console.log('[gen] 请求:', url)
+      try {
+        const r = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        })
+        const reader = r.body.getReader(); const decoder = new TextDecoder()
+        let buf = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n'); buf = lines.pop()
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const evt = JSON.parse(line.slice(6))
+                if (evt.type === 'gen_page_start') {
+                  this.genProgress.push({ path: evt.page_path, status: 'running', index: evt.page_index + 1, total: evt.data?.total })
+                } else if (evt.type === 'gen_page_done') {
+                  const g = this.genProgress.findLast(x => x.path === evt.page_path && x.status === 'running')
+                  if (g) g.status = 'done'
+                } else if (evt.type === 'gen_page_error') {
+                  const g = this.genProgress.findLast(x => x.path === evt.page_path && x.status === 'running')
+                  if (g) { g.status = 'error'; g.error = evt.data?.error }
+                } else if (evt.type === 'gen_done') {
+                  console.log('[gen] done:', evt.pages_created?.length, 'pages')
+                  this.generating = false
+                  if (evt.success) {
+                    this.selectedProjectObj.has_wiki = true
+                    await this.loadProjects(); await this.refreshCommits()
+                  }
+                  return
+                }
+              } catch(_) {}
+            }
+          }
+        }
+      } catch (e) {
+        this.generating = false
+        console.error('[gen] failed:', e)
+      }
+    },
+
+    // ── Quality Check ──────────────────────────────────────────────────
+    async checkQuality() {
+      this.checking = true; this.qualityReport = null
+      try {
+        const r = await fetch(`${API}/projects/${this.selectedProject}/quality-check`, {
+          method: 'POST',
+        })
+        this.qualityReport = await r.json()
+      } catch (e) {
+        this.qualityReport = { total_issues: -1, issues: [], error: e.message }
+      }
+      this.checking = false
     },
   }
 }).mount('#app')

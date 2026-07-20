@@ -16,6 +16,7 @@ from typing import Any
 
 from pi_ai import get_model, get_models, get_providers
 from pi_ai.types import Model
+from pi_coding_agent.logging import logger
 
 
 # ─── Config schema (runtime validation without AJV) ───────────────────────────
@@ -226,6 +227,8 @@ class ModelRegistry:
 
         built_in = self._load_built_in_models(overrides, model_overrides)
         combined = self._merge_custom_models(built_in, custom_models)
+
+        logger.info("========>加载到的模型========="),
 
         # Apply OAuth provider modifications if auth_storage supports it
         if self._auth_storage and hasattr(self._auth_storage, "get_oauth_providers"):
@@ -443,10 +446,7 @@ class ModelRegistry:
         return self.get_all()
 
     async def get_available(self) -> list[Model]:
-        """
-        Get only models that have auth configured.
-        Mirrors getAvailable() in TypeScript.
-        """
+        """Get only models that have auth configured."""
         if self._auth_storage and hasattr(self._auth_storage, "has_auth"):
             return [m for m in self._models if self._auth_storage.has_auth(m.provider)]
         # Fallback: check environment variables

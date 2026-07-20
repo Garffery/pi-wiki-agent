@@ -171,6 +171,13 @@
             <div class="content-header">
               <h2 class="page-title">{{ selectedProject }}</h2>
               <div class="content-actions">
+                <button v-if="!selectedProjectObj?.has_wiki && selectedProjectObj?.has_generation_plan"
+                        class="btn-primary" @click="generateWiki" :disabled="generating" style="background: #8B5CF6">
+                  {{ generating ? '生成中...' : '生成 Wiki' }}
+                </button>
+                <button class="btn-secondary" @click="checkQuality" :disabled="checking">
+                  {{ checking ? '检查中...' : '质量检查' }}
+                </button>
                 <button class="btn-primary" @click="syncAll" :disabled="syncing">
                   {{ syncing ? '同步中...' : '全部同步' }}
                 </button>
@@ -195,6 +202,56 @@
                 </tr>
               </tbody>
             </table>
+
+            <div v-if="selectedProjectObj && !selectedProjectObj.has_wiki" class="detail-card" style="border-left: 3px solid #8B5CF6">
+              <div class="detail-header">
+                <h3 class="detail-title">Wiki 未初始化</h3>
+                <p class="detail-subtitle">
+                  <template v-if="selectedProjectObj.has_generation_plan">
+                    已检测到 generation-plan.json，点击上方"生成 Wiki"按钮开始生成。
+                  </template>
+                  <template v-else>
+                    请创建 <code>.wiki/generation-plan.json</code> 文件定义 Wiki 结构，然后刷新页面。
+                  </template>
+                </p>
+              </div>
+              <div v-if="genProgress.length > 0" class="chain-steps" style="padding: 8px 16px 16px">
+                <div v-for="g in genProgress" :key="g.path" class="chain-step"
+                     :class="{ done: g.status === 'done', error: g.status === 'error', running: g.status === 'running' }">
+                  <span class="step-status-icon">{{ g.status === 'done' ? '✓' : g.status === 'error' ? '✗' : '●' }}</span>
+                  <span class="step-name">{{ g.path }}</span>
+                  <span class="step-progress">{{ g.index }}/{{ g.total }}</span>
+                  <span class="step-state">{{ g.status === 'running' ? '生成中' : g.status === 'done' ? '完成' : '失败' }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="qualityReport" class="detail-card">
+              <div class="detail-header">
+                <h3 class="detail-title">质量检查报告</h3>
+                <p class="detail-subtitle">
+                  {{ qualityReport.total_pages }} 页面 ·
+                  <span class="quality-error">{{ qualityReport.errors }} error</span> ·
+                  <span class="quality-warn">{{ qualityReport.warnings }} warning</span>
+                  <template v-if="qualityReport.checked_at"> · {{ new Date(qualityReport.checked_at).toLocaleString() }}</template>
+                </p>
+              </div>
+              <div v-if="qualityReport.total_issues === 0" class="empty-text" style="padding:16px">
+                未发现问题，wiki 质量良好
+              </div>
+              <div v-else class="quality-issues">
+                <div v-for="(issue, idx) in qualityReport.issues" :key="idx" class="quality-issue"
+                     :class="'q-' + issue.severity">
+                  <span class="q-badge" :class="'q-badge-' + issue.severity">
+                    {{ issue.severity === 'error' ? '✗' : issue.severity === 'warning' ? '!' : 'i' }}
+                  </span>
+                  <div class="q-body">
+                    <div class="q-page">{{ issue.page }}<span v-if="issue.section" class="q-section"> › {{ issue.section }}</span></div>
+                    <div class="q-msg">{{ issue.message }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <div v-if="commitDetail" class="detail-card">
               <div class="detail-header">
@@ -229,10 +286,24 @@
               </details>
 
               <div class="detail-actions">
+                <label class="toggle-label chain-toggle" :title="useChain ? '当前：Chain 链式 (diff-analyzer → planner → writer)' : '当前：单 Agent 直接同步'">
+                  <input type="checkbox" v-model="useChain">
+                  <span v-if="useChain">Chain 链式</span>
+                  <span v-else>单 Agent</span>
+                </label>
                 <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
                   {{ syncing ? '同步中...' : '同步此提交' }}
                 </button>
-                <div v-if="syncing && (streamText || streamTools.length > 0)" class="stream-panel">
+                <div v-if="syncing && (streamText || streamTools.length > 0 || chainSteps.length > 0)" class="stream-panel">
+                  <div v-if="chainSteps.length > 0" class="chain-steps">
+                    <div v-for="s in chainSteps" :key="s.agent" class="chain-step"
+                         :class="{ done: s.status === 'done', error: s.status === 'error', running: s.status === 'running' }">
+                      <span class="step-status-icon">{{ s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : '●' }}</span>
+                      <span class="step-name">{{ s.agent }}</span>
+                      <span class="step-progress">{{ s.step }}/{{ s.total }}</span>
+                      <span class="step-state">{{ s.status === 'running' ? '执行中' : s.status === 'done' ? '完成' : '失败' }}</span>
+                    </div>
+                  </div>
                   <div v-if="streamTools.length > 0" class="stream-tools">
                     <div v-for="t in streamTools" :key="t.name + t.status" class="stream-tool"
                          :class="{ done: t.status === 'done', error: t.status === 'error', running: t.status === 'running' }">
@@ -255,16 +326,19 @@
     </div>
 
     <!-- Add Project Modal -->
-    <div v-if="showAddProject" class="modal-overlay" @click.self="showAddProject = false">
+    <div v-if="showAddProject" class="modal-overlay" @click.self="closeAddProject" @keydown.escape="closeAddProject">
       <div class="modal-card">
-        <h3 class="modal-title">添加项目</h3>
+        <div class="modal-header-row">
+          <h3 class="modal-title">添加项目</h3>
+          <button type="button" class="btn-close" @click="closeAddProject" title="关闭">&times;</button>
+        </div>
         <form @submit.prevent="addProject">
           <label class="form-label">名称</label>
-          <input class="form-input" v-model="newProject.name" required placeholder="例如: taskman">
+          <input class="form-input" v-model="newProject.name" required placeholder="例如: taskman" ref="addProjectName">
           <label class="form-label">路径</label>
           <input class="form-input" v-model="newProject.path" required placeholder="D:/project/wiki-demo-taskman">
           <div class="modal-actions">
-            <button type="button" class="btn-secondary" @click="showAddProject = false">取消</button>
+            <button type="button" class="btn-secondary" @click="closeAddProject">取消</button>
             <button type="submit" class="btn-primary">添加</button>
           </div>
           <p v-if="addError" class="form-error">{{ addError }}</p>
@@ -274,6 +348,6 @@
   </div>
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20250718-3"></script>
 </body>
 </html>

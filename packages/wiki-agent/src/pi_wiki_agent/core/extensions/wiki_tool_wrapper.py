@@ -46,7 +46,6 @@ class WikiToolGuard:
         Returns None if allowed, or a block-result object (with ``block=True``)
         if the operation should be rejected.
         """
-        logger.info("拦截工具===> tool_name={} params={}", tool_name, params)
         if tool_name not in ("edit", "write"):
             return None
         if not self._allowed_wiki_pages:

@@ -84,3 +84,12 @@ class GitMonitor(VCSMonitor):
         if not stdout:
             return []
         return stdout.decode("utf-8", errors="replace").splitlines()
+
+    async def get_file_diff(self, revision: str, file_path: str) -> str:
+        """Return the diff for a single file using ``git diff <rev>~1..<rev> -- <file>``."""
+        parent = f"{revision}~1..{revision}"
+        lines = await self._git("diff", parent, "--", file_path)
+        if not lines:
+            # Initial commit has no parent — use git show
+            lines = await self._git("show", "--format=", revision, "--", file_path)
+        return "\n".join(lines)

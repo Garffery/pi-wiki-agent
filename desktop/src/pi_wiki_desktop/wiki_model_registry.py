@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from loguru import logger
 from pi_coding_agent.core.model_registry import ModelRegistry
 
 

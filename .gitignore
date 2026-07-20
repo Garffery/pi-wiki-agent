@@ -41,3 +41,6 @@ docs/archive/
 
 # Tests (don't push to remote)
 tests/
+
+# Examples (don't push to remote)
+example/

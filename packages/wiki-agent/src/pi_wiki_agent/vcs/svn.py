@@ -96,3 +96,8 @@ class SVNMonitor(VCSMonitor):
         # SVN diff --summarize may output paths with leading repo-relative segments
         # Strip the common project root prefix if present
         return p
+
+    async def get_file_diff(self, revision: str, file_path: str) -> str:
+        """Return the diff for a single file using ``svn diff -c <rev> <file>``."""
+        lines = await self._svn("diff", "-c", revision, file_path)
+        return "\n".join(line.rstrip("\r") for line in lines)

@@ -48,22 +48,26 @@ class LightGuard:
         if not old_string or not new_string:
             return None
 
-        # WIKI_SECTION open marker
-        if _WIKI_SECTION_OPEN.search(old_string):
-            if not _WIKI_SECTION_OPEN.search(new_string):
+        # WIKI_SECTION open marker — compare counts to prevent partial deletion
+        old_opens = len(_WIKI_SECTION_OPEN.findall(old_string))
+        if old_opens > 0:
+            new_opens = len(_WIKI_SECTION_OPEN.findall(new_string))
+            if new_opens < old_opens:
                 return (
-                    "不允许删除 WIKI_SECTION 开标记。你的 old_string 中包含了 "
-                    "`<!-- WIKI_SECTION:...>` 但 new_string 中没有。"
-                    "请保留 section 标记，只修改标记内的文本内容。"
+                    f"不允许删除 WIKI_SECTION 开标记。你的 old_string 中包含了 "
+                    f"{old_opens} 个 `<!-- WIKI_SECTION:...>` 但 new_string 中只有 "
+                    f"{new_opens} 个。请保留所有 section 标记，只修改标记内的文本内容。"
                 )
 
         # WIKI_SECTION close marker
-        if _WIKI_SECTION_CLOSE.search(old_string):
-            if not _WIKI_SECTION_CLOSE.search(new_string):
+        old_closes = len(_WIKI_SECTION_CLOSE.findall(old_string))
+        if old_closes > 0:
+            new_closes = len(_WIKI_SECTION_CLOSE.findall(new_string))
+            if new_closes < old_closes:
                 return (
-                    "不允许删除 WIKI_SECTION_END 闭标记。你的 old_string 中包含了 "
-                    "`<!-- WIKI_SECTION_END -->` 但 new_string 中没有。"
-                    "请保留 section 标记，只修改标记内的文本内容。"
+                    f"不允许删除 WIKI_SECTION_END 闭标记。你的 old_string 中包含了 "
+                    f"{old_closes} 个 `<!-- WIKI_SECTION_END -->` 但 new_string 中只有 "
+                    f"{new_closes} 个。请保留所有 section 标记，只修改标记内的文本内容。"
                 )
 
         # source link

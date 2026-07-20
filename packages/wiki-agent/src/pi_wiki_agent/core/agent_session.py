@@ -110,6 +110,7 @@ class WikiSession:
         extension_runner: Any = None,
         skills: list[Any] | None = None,
         context_files: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self._wiki_project_root = Path(project_root)
         self.cwd = str(project_root)
@@ -173,7 +174,7 @@ class WikiSession:
         logger.info("=======>获得对应的模型:{}", resolved_model)
 
         # Build system prompt (skills + context files pre-loaded by caller)
-        self._base_system_prompt = WIKI_SYSTEM_PROMPT
+        self._base_system_prompt = system_prompt or WIKI_SYSTEM_PROMPT
         if context_files:
             self._base_system_prompt += "\n\n# Project Context\n\n"
             for cf in context_files:
@@ -250,7 +251,7 @@ class WikiSession:
     # ── Model resolution ──────────────────────────────────────────────────────
 
     def _resolve_default_model(self) -> Model:
-        """Resolve the default model from settings."""
+        """Resolve the default model, preferring models with auth configured."""
         try:
             logger.info("model:{}",self._settings.model_id)
             logger.info("provider:{}", self._settings.provider)
@@ -260,7 +261,8 @@ class WikiSession:
             )
             explicit_requested = bool(self._settings.model_id or self._settings.provider)
             has_auth = bool(self._model_registry.get_api_key(resolved.provider))
-            if explicit_requested and not has_auth:
+            if not has_auth:
+                # Try preferred providers, then any model with auth
                 for prov, mid in (
                     ("google", "gemini-2.0-flash"),
                     ("anthropic", "claude-3-5-sonnet-20241022"),
@@ -270,6 +272,12 @@ class WikiSession:
                         fallback = self._model_registry.find(prov, mid)
                         if fallback:
                             return fallback
+                # Last resort: any model with auth
+                for m in self._model_registry.get_all():
+                    if self._model_registry.get_api_key(m.provider):
+                        return m
+                if explicit_requested:
+                    raise RuntimeError(f"No API key found for {resolved.provider}")
             return resolved
         except Exception:
             if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
@@ -1501,25 +1509,18 @@ class WikiSession:
     ) -> SyncResult:
         """Analyze a commit and update affected wiki sections.
 
-        Applies filters from .wiki/filter.json before processing.
+        File-level path filters are applied inside WikiIndexer, so only the
+        commit-level message filter is checked here.
         """
-        from ..filter import FilterManager
-        fm = FilterManager(self._wiki_project_root)
-
-        if fm.should_skip_commit(changed_files, commit_message):
-            logger.info("提交被过滤规则跳过: message={}", commit_message[:80])
+        if self._indexer.filter.should_skip_commit(changed_files, commit_message):
+            logger.info("提交被 message 规则跳过: message={}", commit_message[:80])
             return SyncResult(commit_files=list(changed_files), affected={}, dry_run=dry_run)
 
-        filtered_files = fm.filter_files(changed_files)
-        if not filtered_files:
-            logger.info("所有文件被过滤，无文件需处理: {}", changed_files)
-            return SyncResult(commit_files=list(changed_files), affected={}, dry_run=dry_run)
-
-        affected = self._indexer.get_affected_sections(filtered_files)
+        affected = self._indexer.get_affected_sections(changed_files)
         logger.info("受影响的 wiki 章节: {} 个页面", len(affected))
 
         if not affected:
-            logger.info("未找到受影响的 wiki 章节: files={}", filtered_files)
+            logger.info("未找到受影响的 wiki 章节: files={}", changed_files)
             return SyncResult(
                 commit_files=list(changed_files),
                 affected={},

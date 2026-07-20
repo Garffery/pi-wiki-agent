@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from pi_coding_agent.logging import logger
+
 
 class AuthStorage:
     """
@@ -137,6 +139,9 @@ class AuthStorage:
         # 4. Environment variable fallback
         from pi_ai.env_api_keys import get_env_api_key
         return get_env_api_key(provider)
+
+    def has_auth(self, provider: str) -> bool:
+        return self.resolve_api_key(provider) is not None
 
     def is_using_oauth(self, provider: str) -> bool:
         """Check if provider uses OAuth authentication."""
