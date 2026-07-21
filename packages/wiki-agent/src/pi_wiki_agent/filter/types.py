@@ -10,9 +10,11 @@ class FilterRule(BaseModel):
 
     - type=path:    pattern is a glob/fnmatch expression against file paths.
     - type=message: pattern is a regex against the commit message.
+    - type=author:  pattern is a regex against the commit author (allowlist).
+                    If any author rule exists, only matching authors are processed.
     """
 
-    type: str = Field(..., pattern=r"^(path|message)$")
+    type: str = Field(..., pattern=r"^(path|message|author)$")
     pattern: str
     description: str = ""
 

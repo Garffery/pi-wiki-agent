@@ -19,7 +19,7 @@ createApp({
       useChain: true,
       chainSteps: [],
       showAddProject: false,
-      newProject: { name: '', path: '' },
+      newProject: { name: '', path: '', start_revision: '' },
       addError: '',
       models: [],
       selectedModel: '',
@@ -255,9 +255,19 @@ createApp({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.newProject),
         })
-        if (r.ok) { this.showAddProject = false; this.newProject = { name: '', path: '' }; await this.loadProjects() }
+        if (r.ok) { this.showAddProject = false; this.newProject = { name: '', path: '', start_revision: '' }; await this.loadProjects() }
         else { const err = await r.json(); this.addError = err.detail || '添加失败' }
       } catch (e) { this.addError = e.message }
+    },
+    async deleteProject(name) {
+      if (!confirm(`确定要删除项目 "${name}" 吗？`)) return
+      try {
+        await fetch(`${API}/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
+        if (this.selectedProject === name) {
+          this.selectedProject = ''; this.commits = []; this.commitDetail = null
+        }
+        await this.loadProjects()
+      } catch (e) { console.error(e) }
     },
 
     // ── Models ───────────────────────────────────────────────────────

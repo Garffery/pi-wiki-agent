@@ -221,6 +221,7 @@ def _default_session_factory(
         extension_runner=extension_runner,
         skills=skills,
         context_files=context_files,
+        active_tools=active_tools,
     )
     return ws
 

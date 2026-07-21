@@ -32,6 +32,7 @@
                 @click="selectProject(p.name)">
               <span class="project-name">{{ p.name }}</span>
               <span v-if="p.pending_commits > 0" class="badge">{{ p.pending_commits }}</span>
+              <button class="btn-delete-project" @click.stop="deleteProject(p.name)" title="删除项目">&times;</button>
             </li>
           </ul>
           <div v-if="projects.length === 0" class="empty-text">暂无项目</div>
@@ -125,7 +126,7 @@
                     </thead>
                     <tbody>
                       <tr v-for="(f, i) in filters" :key="i">
-                        <td><span class="tag" :class="'tag-' + f.type">{{ f.type === 'path' ? '路径' : '消息' }}</span></td>
+                        <td><span class="tag" :class="'tag-' + f.type">{{ f.type === 'path' ? '路径' : f.type === 'author' ? '作者' : '消息' }}</span></td>
                         <td><code>{{ f.pattern }}</code></td>
                         <td class="col-desc">{{ f.description }}</td>
                         <td><button class="btn-ghost btn-danger" @click="deleteFilter(i)">删除</button></td>
@@ -144,12 +145,13 @@
                         <select class="form-input" v-model="newFilter.type">
                           <option value="path">路径 (glob)</option>
                           <option value="message">消息 (正则)</option>
+                          <option value="author">作者 (正则)</option>
                         </select>
                       </div>
                       <div style="flex:2">
                         <label class="form-label">模式</label>
                         <input class="form-input" v-model="newFilter.pattern" required
-                               :placeholder="newFilter.type === 'path' ? '.wiki/**, test/**' : '^debug:, \\[skip-wiki\\]'">
+                               :placeholder="newFilter.type === 'path' ? '.wiki/**, test/**' : newFilter.type === 'author' ? 'your-name' : '^debug:, \\[skip-wiki\\]'">
                       </div>
                     </div>
                     <label class="form-label">说明</label>
@@ -337,6 +339,8 @@
           <input class="form-input" v-model="newProject.name" required placeholder="例如: taskman" ref="addProjectName">
           <label class="form-label">路径</label>
           <input class="form-input" v-model="newProject.path" required placeholder="D:/project/wiki-demo-taskman">
+          <label class="form-label">起始版本（可选，此版本之前的提交将被忽略）</label>
+          <input class="form-input" v-model="newProject.start_revision" placeholder="例如: abc1234 或 r42">
           <div class="modal-actions">
             <button type="button" class="btn-secondary" @click="closeAddProject">取消</button>
             <button type="submit" class="btn-primary">添加</button>
@@ -347,7 +351,7 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="vue.global.prod.js"></script>
   <script src="app.js?v=20250718-3"></script>
 </body>
 </html>

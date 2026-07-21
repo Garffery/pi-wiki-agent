@@ -111,6 +111,7 @@ class WikiSession:
         skills: list[Any] | None = None,
         context_files: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
+        active_tools: list[str] | None = None,
     ) -> None:
         self._wiki_project_root = Path(project_root)
         self.cwd = str(project_root)
@@ -226,11 +227,9 @@ class WikiSession:
         # ── Scoped models (for cycling) ───────────────────────────────────────
         self._scoped_models: list[dict[str, Model | ThinkingLevel | None]] | None = None
 
-        # ── Restrict active tools to wiki subset ─────────────────────────────
-        active_tool_names = list(WIKI_TOOLS)
+        # ── Restrict active tools ───────────────────────────────────────────
+        active_tool_names = list(active_tools) if active_tools else list(WIKI_TOOLS)
         self.set_active_tools_by_name(active_tool_names)
-        logger.info("可用工具: {}", active_tool_names)
-
     # ── Tool construction ─────────────────────────────────────────────────────
 
     def _build_tools(self, extra_tools: list[AgentTool] | None = None) -> list[AgentTool]:
@@ -836,15 +835,15 @@ class WikiSession:
         return [t.name for t in self._all_tools]
 
     def set_active_tools_by_name(self, tool_names: list[str]) -> None:
-        """
-        Set active tools by name. Rebuilds system prompt to reflect new tool set.
-        Wiki uses a fixed system prompt; tool set changes do not regenerate it.
-        """
-        name_set = set(tool_names)
+        """Set active tools by name, filtering from all registered tools."""
+        name_set: set[str] = set()
+        for t in tool_names:
+            if isinstance(t, str):
+                name_set.add(t)
+            else:
+                name_set.add(getattr(t, "name", str(t)))
         active = [t for t in self._all_tools if t.name in name_set]
         self._agent.set_tools(active)
-        self._base_system_prompt = WIKI_SYSTEM_PROMPT
-        self._agent.set_system_prompt(self._base_system_prompt)
 
     # ── Model management (2g) ─────────────────────────────────────────────────
 
@@ -1506,14 +1505,15 @@ class WikiSession:
         diff: str,
         *,
         dry_run: bool = False,
+        author: str = "",
     ) -> SyncResult:
         """Analyze a commit and update affected wiki sections.
 
         File-level path filters are applied inside WikiIndexer, so only the
-        commit-level message filter is checked here.
+        commit-level message and author filters are checked here.
         """
-        if self._indexer.filter.should_skip_commit(changed_files, commit_message):
-            logger.info("提交被 message 规则跳过: message={}", commit_message[:80])
+        if self._indexer.filter.should_skip_commit(changed_files, commit_message, author):
+            logger.info("提交被规则跳过: message={}", commit_message[:80])
             return SyncResult(commit_files=list(changed_files), affected={}, dry_run=dry_run)
 
         affected = self._indexer.get_affected_sections(changed_files)

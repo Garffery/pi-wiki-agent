@@ -74,6 +74,12 @@ body {
 .project-list li.active { background: var(--active-bg); }
 .project-name { font-weight: 500; }
 .vcs-tag { font-size: 10px; color: var(--text-secondary); }
+.btn-delete-project {
+  background: none; border: none; color: var(--text-secondary); font-size: 16px;
+  cursor: pointer; padding: 0 4px; line-height: 1; opacity: 0; transition: opacity .12s;
+}
+.project-list li:hover .btn-delete-project { opacity: 1; }
+.btn-delete-project:hover { color: var(--error); }
 .badge {
   font-size: 11px; font-weight: 600; min-width: 20px; height: 20px;
   padding: 0 6px; border-radius: 10px; background: var(--primary);
@@ -315,6 +321,7 @@ body {
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
 .tag-path { background: #DBEAFE; color: #1E40AF; }
 .tag-message { background: #FEF3C7; color: #92400E; }
+.tag-author { background: #D1FAE5; color: #065F46; }
 
 /* ── Toggle ───────────────────────────────────────────────────────── */
 

@@ -64,11 +64,12 @@ class FilterManager:
 
     # ── Public API ──────────────────────────────────────────────────────
 
-    def should_skip_commit(self, changed_files: list[str], message: str = "") -> bool:
+    def should_skip_commit(self, changed_files: list[str], message: str = "", author: str = "") -> bool:
         """Return True if the entire commit should be skipped.
 
         A commit is skipped if:
         - The message matches any message-type rule.
+        - Author rules exist and the author matches none of them (allowlist).
         - After filtering paths, no relevant files remain.
         """
         cfg = self.config
@@ -85,7 +86,28 @@ class FilterManager:
                 except re.error:
                     continue
 
+        # Author rules — allowlist: if any author rule exists, author must match one
+        author_rules = [r for r in cfg.rules if r.type == "author"]
+        if author_rules:
+            matched = False
+            for rule in author_rules:
+                try:
+                    if re.search(rule.pattern, author):
+                        matched = True
+                        break
+                except re.error:
+                    continue
+            if not matched:
+                logger.info("提交被 author 规则跳过: author={}", author)
+                return True
+
         return False
+
+    def should_include_commit(self, changed_files: list[str], message: str = "", author: str = "") -> bool:
+        """Return True if the commit passes all filters (path + message + author)."""
+        if self.should_skip_commit(changed_files, message, author):
+            return False
+        return bool(self.filter_files(changed_files))
 
     def is_path_excluded(self, file_path: str) -> bool:
         """Return True if *file_path* is excluded by any path filter rule."""

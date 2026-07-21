@@ -12,6 +12,7 @@ from pydantic import BaseModel
 class ProjectCreate(BaseModel):
     name: str
     path: str
+    start_revision: str = ""  # 从此版本开始监控，之前的提交忽略
 
 
 class SyncRequest(BaseModel):

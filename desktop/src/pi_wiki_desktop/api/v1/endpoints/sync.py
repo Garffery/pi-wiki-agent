@@ -31,6 +31,7 @@ async def sync_commit(name: str, rev: str, body: SyncRequest | None = None,
     try:
         result = await ws.sync_from_commit(
             changed_files=commit.files, commit_message=commit.message, diff=commit.diff,
+            author=commit.author,
         )
         await monitor.mark_processed(rev)
         return SyncResult(revision=rev, success=True, wiki_pages_modified=result.wiki_pages_modified)

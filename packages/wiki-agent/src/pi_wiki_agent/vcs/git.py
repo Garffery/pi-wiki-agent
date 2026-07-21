@@ -17,20 +17,22 @@ class GitMonitor(VCSMonitor):
         range_spec = f"{last}..HEAD" if last else "HEAD"
         commits: list[CommitInfo] = []
 
-        lines = await self._git("log", "--format=%H %s", range_spec, "--first-parent", "--reverse")
+        lines = await self._git("log", "--format=%H%n%an%n%s", range_spec, "--first-parent", "--reverse")
         if not lines:
             return commits
 
-        for line in lines:
-            parts = line.strip().split(" ", 1)
-            if len(parts) < 2:
-                continue
-            rev, msg = parts[0], parts[1]
+        i = 0
+        while i + 2 < len(lines):
+            rev = lines[i].strip()
+            author = lines[i + 1].strip()
+            msg = lines[i + 2].strip()
+            i += 3
             files = await self._git("diff-tree", "--no-commit-id", "--name-only", "-r", rev)
             if not files:
                 files = await self._git("diff-tree", "--no-commit-id", "--name-only", "-r", "--root", rev)
             commits.append(CommitInfo(
                 revision=rev,
+                author=author,
                 message=msg,
                 files=[self._norm_path(f) for f in files if f.strip()],
             ))
@@ -93,3 +95,15 @@ class GitMonitor(VCSMonitor):
             # Initial commit has no parent — use git show
             lines = await self._git("show", "--format=", revision, "--", file_path)
         return "\n".join(lines)
+
+    async def get_nth_ancestor(self, n: int) -> str:
+        """Return the revision N commits before HEAD (0 = HEAD)."""
+        if n <= 0:
+            lines = await self._git("rev-parse", "HEAD")
+            return lines[0].strip() if lines else ""
+        lines = await self._git("rev-list", "--first-parent", f"--skip={n}", "--max-count=1", "HEAD")
+        if lines:
+            return lines[0].strip()
+        # Repo has fewer than N commits — return the first commit
+        lines = await self._git("rev-list", "--first-parent", "--max-parents=0", "HEAD")
+        return lines[0].strip() if lines else ""

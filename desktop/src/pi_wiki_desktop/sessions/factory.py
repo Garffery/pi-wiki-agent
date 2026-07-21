@@ -95,6 +95,7 @@ def make_chain_session_factory(registry: WikiModelRegistry, default_model: str |
             extension_runner=store.get("extension_runner"),
             skills=store.get("skills", []),
             context_files=store.get("agents_files", []),
+            active_tools=active_tools,
         )
 
         event_callback = kwargs.get("event_callback")

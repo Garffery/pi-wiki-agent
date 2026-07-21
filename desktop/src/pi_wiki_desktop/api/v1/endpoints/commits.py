@@ -7,7 +7,7 @@ from ....models import CommitDetail, CommitSummary, AffectInfo
 from ....sessions.factory import get_model_registry, get_or_create_session, WikiSessionOptions
 from pi_wiki_agent.indexer import WikiIndexer
 from pi_wiki_agent.vcs import CommitInfo, create_monitor
-
+from loguru import logger
 router = APIRouter()
 
 
@@ -40,12 +40,13 @@ async def list_commits(name: str):
     monitor = create_monitor(cfg["path"])
     commits = await monitor.poll()
 
-    # Exclude commits whose files are all filtered out
+    # Exclude commits filtered out by path, message, or author rules
     indexer = WikiIndexer(cfg["path"])
     visible: list[CommitSummary] = []
     for c in commits:
-        if indexer.filter.filter_files(c.files):
+        if indexer.filter.should_include_commit(c.files, c.message, c.author):
             visible.append(_commit_to_summary(c))
+    logger.info("===>commits: {}", len(visible))
     return visible
 
 
@@ -59,7 +60,7 @@ async def get_commit_detail(name: str, rev: str, registry = Depends(get_model_re
     ws = get_or_create_session(WikiSessionOptions(project_path=cfg["path"]), registry)
     result = await ws.sync_from_commit(
         changed_files=commit.files, commit_message=commit.message,
-        diff=commit.diff, dry_run=True,
+        diff=commit.diff, dry_run=True, author=commit.author,
     )
 
     # Build filtered diff — exclude files blocked by path filters

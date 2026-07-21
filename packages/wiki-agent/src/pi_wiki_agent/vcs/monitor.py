@@ -66,6 +66,11 @@ class VCSMonitor(ABC):
         """
         ...
 
+    @abstractmethod
+    async def get_nth_ancestor(self, n: int) -> str:
+        """Return the revision identifier for the N-th ancestor of HEAD (0 = HEAD)."""
+        ...
+
     async def write_file_diffs(self, revision: str, files: list[str], output_dir: str) -> list[str]:
         """Write per-file diffs for *revision* to *output_dir* via native VCS commands.
 
