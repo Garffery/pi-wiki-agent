@@ -374,23 +374,70 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #D1D5DB; }
 
-/* ── Chain Toggle ───────────────────────────────────────────────────── */
+/* ── Sync Mode Selector ─────────────────────────────────────────────── */
 
-.chain-toggle {
-  padding: 6px 12px;
+.sync-mode-group {
+  display: inline-flex;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--white);
+  overflow: hidden;
+}
+.sync-mode-btn {
+  padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: border-color .15s;
+  background: var(--white);
+  border-right: 1px solid var(--border);
+  transition: background .15s, color .15s;
+  user-select: none;
 }
-.chain-toggle:hover { border-color: var(--primary); }
+.sync-mode-btn:last-child { border-right: none; }
+.sync-mode-btn input[type="radio"] { display: none; }
+.sync-mode-btn:hover { background: #F3F4F6; }
+.sync-mode-btn.active { background: var(--primary); color: #fff; }
 
 /* ── Chain Steps ────────────────────────────────────────────────────── */
 
 .chain-steps {
   display: flex; flex-direction: column; gap: 6px;
+}
+.wf-phase-label {
+  font-size: 12px; font-weight: 600; color: var(--primary);
+  padding: 4px 0 2px;
+}
+.wf-agent-card {
+  margin-bottom: 4px;
+}
+.wf-agent-card.running {
+  border-left: 3px solid #93C5FD;
+  padding-left: 8px;
+}
+.wf-agent-card.done {
+  border-left: 3px solid #86EFAC;
+  padding-left: 8px;
+}
+.wf-agent-card.error {
+  border-left: 3px solid #FCA5A5;
+  padding-left: 8px;
+}
+pre.wf-agent-log {
+  font-size: 11px; max-height: 160px; overflow-y: auto;
+  margin: 4px 0 0 24px; padding: 6px 8px;
+  background: #F8FAFC; border-radius: 4px;
+}
+.wf-log-details {
+  margin: 2px 0 0 24px; font-size: 12px;
+}
+.wf-log-details summary {
+  cursor: pointer; color: var(--primary);
+}
+.wf-log-details pre {
+  font-size: 11px; max-height: 120px; overflow-y: auto;
+  margin-top: 4px; padding: 4px 8px;
+  background: #F8FAFC; border-radius: 4px;
+}
+.step-error {
+  font-size: 11px; color: #EF4444; margin-left: auto;
 }
 .chain-step {
   display: flex; align-items: center; gap: 8px;

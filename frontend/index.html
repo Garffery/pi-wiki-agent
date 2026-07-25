@@ -288,16 +288,49 @@
               </details>
 
               <div class="detail-actions">
-                <label class="toggle-label chain-toggle" :title="useChain ? '当前：Chain 链式 (diff-analyzer → planner → writer)' : '当前：单 Agent 直接同步'">
-                  <input type="checkbox" v-model="useChain">
-                  <span v-if="useChain">Chain 链式</span>
-                  <span v-else>单 Agent</span>
-                </label>
+                <div class="sync-mode-group">
+                  <label class="sync-mode-btn" :class="{ active: syncMode === 'single' }" title="单 Agent 直接同步">
+                    <input type="radio" v-model="syncMode" value="single"> 单 Agent
+                  </label>
+                  <label class="sync-mode-btn" :class="{ active: syncMode === 'chain' }" title="Chain 链式 (diff-analyzer → planner → writer)">
+                    <input type="radio" v-model="syncMode" value="chain"> Chain 链式
+                  </label>
+                  <label class="sync-mode-btn" :class="{ active: syncMode === 'workflow' }" title="Workflow 并行 (同阶段 agent 并发执行)">
+                    <input type="radio" v-model="syncMode" value="workflow"> Workflow 并行
+                  </label>
+                </div>
                 <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
                   {{ syncing ? '同步中...' : '同步此提交' }}
                 </button>
-                <div v-if="syncing && (streamText || streamTools.length > 0 || chainSteps.length > 0)" class="stream-panel">
-                  <div v-if="chainSteps.length > 0" class="chain-steps">
+                <div v-if="syncing && (streamText || streamTools.length > 0 || chainSteps.length > 0 || wfAgents.length > 0)" class="stream-panel">
+                  <!-- Workflow progress -->
+                  <div v-if="syncMode === 'workflow' && wfAgents.length > 0" class="chain-steps">
+                    <div v-if="wfPhase" class="wf-phase-label">{{ wfPhase }}</div>
+                    <div v-for="a in wfAgents" :key="a.label" class="wf-agent-card"
+                         :class="{ done: a.status === 'done', error: a.status === 'error', running: a.status === 'running' }">
+                      <div class="chain-step">
+                        <span class="step-status-icon">{{ a.status === 'done' ? '✓' : a.status === 'error' ? '✗' : '●' }}</span>
+                        <span class="step-name">{{ a.label }}</span>
+                        <span class="step-state">{{ a.status === 'running' ? '执行中' : a.status === 'done' ? '完成' : '失败' }}</span>
+                        <span v-if="a.error" class="step-error">{{ a.error }}</span>
+                      </div>
+                      <div v-if="a.tools && a.tools.length > 0" class="stream-tools" style="padding-left:24px">
+                        <div v-for="t in a.tools" :key="a.label + t.name" class="stream-tool"
+                             :class="{ done: t.status === 'done', error: t.status === 'error', running: t.status === 'running' }">
+                          <span class="tool-dot"></span>
+                          <span class="tool-name">{{ t.name }}</span>
+                          <span class="tool-status">{{ t.status === 'running' ? '执行中' : t.status === 'done' ? '完成' : '失败' }}</span>
+                        </div>
+                      </div>
+                      <pre v-if="a.log && a.status === 'running'" class="stream-output wf-agent-log">{{ a.log }}</pre>
+                      <details v-if="a.log && a.status !== 'running'" class="wf-log-details">
+                        <summary>查看输出</summary>
+                        <pre class="stream-output wf-agent-log">{{ a.log }}</pre>
+                      </details>
+                    </div>
+                  </div>
+                  <!-- Chain progress -->
+                  <div v-if="syncMode === 'chain' && chainSteps.length > 0" class="chain-steps">
                     <div v-for="s in chainSteps" :key="s.agent" class="chain-step"
                          :class="{ done: s.status === 'done', error: s.status === 'error', running: s.status === 'running' }">
                       <span class="step-status-icon">{{ s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : '●' }}</span>
@@ -306,7 +339,7 @@
                       <span class="step-state">{{ s.status === 'running' ? '执行中' : s.status === 'done' ? '完成' : '失败' }}</span>
                     </div>
                   </div>
-                  <div v-if="streamTools.length > 0" class="stream-tools">
+                  <div v-if="streamTools.length > 0 && syncMode !== 'workflow'" class="stream-tools">
                     <div v-for="t in streamTools" :key="t.name + t.status" class="stream-tool"
                          :class="{ done: t.status === 'done', error: t.status === 'error', running: t.status === 'running' }">
                       <span class="tool-dot"></span>
@@ -314,7 +347,7 @@
                       <span class="tool-status">{{ t.status === 'running' ? '执行中' : t.status === 'done' ? '完成' : '失败' }}</span>
                     </div>
                   </div>
-                  <pre class="stream-output" v-if="streamText">{{ streamText }}</pre>
+                  <pre class="stream-output" v-if="streamText && syncMode !== 'workflow'">{{ streamText }}</pre>
                 </div>
                 <div v-if="syncResult" class="sync-result" :class="{ error: !syncResult.success }">
                   <template v-if="syncResult.success">已修改 {{ syncResult.pages?.length || 0 }} 个页面</template>
@@ -352,6 +385,6 @@
   </div>
 
   <script src="vue.global.prod.js"></script>
-  <script src="app.js?v=20250718-3"></script>
+  <script src="app.js?v=20250725-2"></script>
 </body>
 </html>

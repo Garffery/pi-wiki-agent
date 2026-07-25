@@ -16,8 +16,10 @@ createApp({
       syncResult: null,
       streamText: '',
       streamTools: [],
-      useChain: true,
+      syncMode: 'chain',  // 'single' | 'chain' | 'workflow'
       chainSteps: [],
+      wfAgents: [],     // workflow agent status list
+      wfPhase: '',      // current workflow phase
       showAddProject: false,
       newProject: { name: '', path: '', start_revision: '' },
       addError: '',
@@ -99,14 +101,17 @@ createApp({
     },
 
     async syncCommit(rev) {
-      this.syncing = true; this.syncResult = null; this.streamText = ''; this.streamTools = []; this.chainSteps = []
+      this.syncing = true; this.syncResult = null; this.streamText = ''; this.streamTools = []; this.chainSteps = []; this.wfAgents = []; this.wfPhase = ''
       this.streamText = '正在启动同步...\n'
-      console.log('[syncCommit] useChain:', this.useChain, 'rev:', rev)
-      if (this.useChain) {
-        console.log('[syncCommit] → CHAIN 模式 (chain-sync)')
+      console.log('[syncCommit] syncMode:', this.syncMode, 'rev:', rev)
+      if (this.syncMode === 'workflow') {
+        console.log('[syncCommit] → WORKFLOW 并行模式')
+        await this._workflowSyncStream(rev)
+      } else if (this.syncMode === 'chain') {
+        console.log('[syncCommit] → CHAIN 链式模式')
         await this._chainSyncStream(rev)
       } else {
-        console.log('[syncCommit] → 单 Agent 模式 (sync)')
+        console.log('[syncCommit] → 单 Agent 模式')
         await this._syncStream(rev)
       }
     },
@@ -172,6 +177,70 @@ createApp({
                 } else if (evt.type === 'chain_done') {
                   console.log('[chain] done:', evt.success, 'error:', evt.error)
                   this.syncResult = evt
+                  this.syncing = false
+                  if (evt.success) {
+                    this.selectedCommit = ''
+                    this.commitDetail = null
+                    await this.loadProjects()
+                    await this.refreshCommits()
+                  }
+                  return
+                }
+              } catch(_) {}
+            }
+          }
+        }
+      } catch (e) {
+        this.syncResult = { success: false, error: e.message }
+        this.syncing = false
+      }
+    },
+
+    async _workflowSyncStream(rev) {
+      this.streamText = ''
+      const body = this.selectedModel ? JSON.stringify({ model: this.selectedModel }) : undefined
+      const url = `${API}/projects/${this.selectedProject}/workflow-sync/${rev}/stream`
+      console.log('[workflow] 请求:', url)
+      try {
+        const r = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        })
+        const reader = r.body.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n'); buf = lines.pop()
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const evt = JSON.parse(line.slice(6))
+                // Route events to the matching agent
+                const sub = evt._subagent
+                let agent = sub ? this.wfAgents.findLast(x => x.label === sub) : null
+
+                if (evt.type === 'workflow_phase') {
+                  this.wfPhase = evt.phase
+                } else if (evt.type === 'workflow_agent_start') {
+                  agent = { label: evt.label, phase: evt.phase, status: 'running', log: '', tools: [] }
+                  this.wfAgents.push(agent)
+                } else if (evt.type === 'workflow_agent_end') {
+                  if (!agent) agent = this.wfAgents.findLast(x => x.label === evt.label && x.status === 'running')
+                  if (agent) { agent.status = evt.error ? 'error' : 'done'; agent.error = evt.error }
+                } else if (evt.type === 'message_update' && evt.text) {
+                  if (agent) { agent.log += evt.text }
+                } else if (evt.type === 'tool_execution_start') {
+                  if (agent) { agent.tools.push({ name: evt.tool, status: 'running', args: evt.args }) }
+                } else if (evt.type === 'tool_execution_end') {
+                  if (agent) {
+                    const t = agent.tools.findLast(x => x.name === evt.tool && x.status === 'running')
+                    if (t) t.status = evt.is_error ? 'error' : 'done'
+                  }
+                } else if (evt.type === 'workflow_done') {
+                  console.log('[workflow] done:', evt.success, 'agents:', evt.agent_count, 'duration:', evt.duration_ms, 'ms')
+                  this.syncResult = { success: evt.success, error: evt.error, pages: evt.result?.phase3_write?.results || [] }
                   this.syncing = false
                   if (evt.success) {
                     this.selectedCommit = ''

@@ -1,0 +1,68 @@
+name: wiki_sync
+description: 分析 VCS 提交并更新 wiki 页面
+concurrency: 8
+
+phases:
+  - title: Analyze
+    steps:
+      - agent: diff-analyzer
+        label: diff analysis
+        prompt: |
+          ## 提交信息
+          ${commit_message}
+
+          ## 变更文件
+          ${join(changed_files, "- ${item}")}
+
+          ## 受影响的 Wiki 章节
+          ${affected_sections}
+
+          ## Diff 文件目录
+          ${diffs_dir}
+
+          请逐一阅读 diff 目录下的文件，分析每个代码变更对 wiki 文档的影响。
+          输出要求：
+          - 每个变更文件单独一段分析
+          - 说明：变更了什么 → 影响哪个 wiki 页面 → 大致需要如何更新
+          - 如果某个文件不影响 wiki，标记为 "no wiki impact"
+
+  - title: Plan
+    steps:
+      - agent: wiki-planner
+        label: wiki planning
+        prompt: |
+          基于以下分析，为每个需要更新 wiki 的文件生成具体的操作指令：
+
+          ${previous}
+
+          要求：
+          1. 对每个有实际 wiki 影响的变更文件，生成一条任务
+          2. 同一 wiki 页面的多个文件修改，合并为一条任务
+          3. 调用 structured_output 工具返回结果
+        output_schema:
+          file_tasks:
+            file: str
+            wiki_page: str
+            section: str?
+            action: {enum: [create, update, delete]}
+            instructions: str
+          no_change_files: [str]
+
+  - title: Write
+    mode: parallel
+    for_each: ${outputs.Plan.file_tasks}
+    steps:
+      - agent: wiki-writer
+        label: write-${item.wiki_page}
+        prompt: |
+          ## 任务
+          源文件: ${item.file}
+          目标 Wiki 页面: ${item.wiki_page}
+          目标章节: ${item.section}
+          操作类型: ${item.action}
+          修改指令: ${item.instructions}
+
+          ## 项目上下文
+          项目路径: ${project_path}
+
+          请根据上述指令修改对应的 wiki 页面。完成后简要说明做了什么修改。

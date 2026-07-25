@@ -106,7 +106,7 @@ class AgentSession:
             from .extensions.wrapper import wrap_tools_with_extensions
             self._all_tools = wrap_tools_with_extensions(self._all_tools, self._extension_runner)
         active_tools = list(self._all_tools)  # start with all tools active
-        print(f"[AgentSession] 已注册 {len(self._all_tools)} 个工具: {[t.name for t in self._all_tools]}")
+        logger.info(f"[AgentSession] 已注册 {len(self._all_tools)} 个工具: {[t.name for t in self._all_tools]}")
 
         # Resolve model
         resolved_model = model or self._resolve_default_model()
@@ -653,7 +653,6 @@ class AgentSession:
         self._base_system_prompt = build_system_prompt(
             self.cwd, selected_tools=valid_names
         )
-        logger.info("基础系统提示词: {}", self._base_system_prompt)
         self._agent.set_system_prompt(self._base_system_prompt)
 
     # ── Model management (2g) ─────────────────────────────────────────────────
