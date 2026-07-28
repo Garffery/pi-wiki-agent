@@ -326,7 +326,7 @@ def _assert_serializable(value: Any, name: str) -> None:
         json_module.dumps(value)
     except (TypeError, ValueError) as e:
         raise ValueError(
-            f"{name} must be JSON-serializable; did you forget to await agent(), parallel(), or pipeline()? {e}"
+            f"{name} must be JSON-serializable; did you forget to await agent(), parallel(), pipeline(), or dag()? {e}"
         ) from e
 
 
@@ -341,7 +341,7 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
 
     The script's meta assignment is parsed first, then the body is executed
     inside a restricted exec() context with agent(), parallel(), pipeline(),
-    phase(), log(), args, cwd, and budget globals.
+    dag(), phase(), log(), args, cwd, and budget globals.
     """
     options = options or WorkflowRunOptions()
     started = time.monotonic()
@@ -522,11 +522,134 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
 
         return await asyncio.gather(*[_run_item(item, i) for i, item in enumerate(items)])
 
+    # ── dag ──
+    async def _dag(tasks: list):
+        """Execute tasks respecting DAG dependencies with maximum concurrency.
+
+        Each task: {"id": str, "fn": callable, "depends_on": list[str]}
+        Returns: dict mapping task id to its result (None if skipped or failed).
+        """
+        _check_aborted()
+        if not isinstance(tasks, list):
+            raise TypeError("dag() expects a list of task dicts")
+
+        if not tasks:
+            return {}
+
+        # ---- Validate task structure and build lookup ----
+        task_map: dict = {}
+        for t in tasks:
+            if not isinstance(t, dict):
+                raise TypeError("each dag task must be a dict")
+            tid = t.get("id")
+            if not isinstance(tid, str) or not tid.strip():
+                raise ValueError(f"each dag task must have a non-empty string 'id', got: {tid!r}")
+            if tid in task_map:
+                raise ValueError(f"duplicate dag task id: {tid!r}")
+            fn = t.get("fn")
+            if not callable(fn):
+                raise ValueError(f"dag task '{tid}' must have a callable 'fn', got: {type(fn).__name__}")
+            deps = t.get("depends_on", [])
+            if not isinstance(deps, list):
+                raise ValueError(f"dag task '{tid}' 'depends_on' must be a list")
+            for d in deps:
+                if not isinstance(d, str):
+                    raise ValueError(f"dag task '{tid}' 'depends_on' entries must be strings, got: {d!r}")
+            task_map[tid] = {"id": tid, "fn": fn, "depends_on": list(deps)}
+
+        # ---- Validate all dependency references exist ----
+        for tid, task in task_map.items():
+            for dep in task["depends_on"]:
+                if dep not in task_map:
+                    raise ValueError(f"dag task '{tid}' depends on unknown task '{dep}'")
+
+        # ---- Cycle detection: DFS with 3-color marking ----
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {tid: WHITE for tid in task_map}
+
+        def _find_cycle(tid, path):
+            color[tid] = GRAY
+            path.append(tid)
+            for dep in task_map[tid]["depends_on"]:
+                if color[dep] == GRAY:
+                    idx = path.index(dep)
+                    return path[idx:] + [dep]
+                elif color[dep] == WHITE:
+                    found = _find_cycle(dep, path[:])
+                    if found:
+                        return found
+            color[tid] = BLACK
+            return None
+
+        for tid in task_map:
+            if color[tid] == WHITE:
+                cycle = _find_cycle(tid, [])
+                if cycle:
+                    raise ValueError(f"dag has a cycle: {' -> '.join(cycle)}")
+
+        # ---- Kahn's algorithm with ready-queue for max parallelism ----
+        in_degree = {tid: len(task["depends_on"]) for tid, task in task_map.items()}
+        dependents = {tid: [] for tid in task_map}
+        for tid, task in task_map.items():
+            for dep in task["depends_on"]:
+                dependents[dep].append(tid)
+
+        results: dict[str, Any] = {}
+        failed: set[str] = set()
+
+        ready = [tid for tid, deg in in_degree.items() if deg == 0]
+
+        while ready:
+            async def _run_one(tid):
+                _check_aborted()
+                task = task_map[tid]
+
+                # Check if any dependency failed -> skip this task
+                for dep in task["depends_on"]:
+                    if dep in failed:
+                        _log(f"dag[{tid}] skipped: dependency '{dep}' failed")
+                        failed.add(tid)
+                        return tid, None
+
+                try:
+                    result = await task["fn"]()
+                    if result is None:
+                        _log(f"dag[{tid}] failed: returned None")
+                        failed.add(tid)
+                    return tid, result
+                except Exception as e:
+                    if signal and signal.is_set():
+                        raise
+                    _log(f"dag[{tid}] failed: {e}")
+                    import traceback as _tb
+                    _log(_tb.format_exc())
+                    failed.add(tid)
+                    return tid, None
+
+            batch = await asyncio.gather(*[_run_one(t) for t in ready])
+
+            next_ready = []
+            for tid, result in batch:
+                results[tid] = result
+                for dep_tid in dependents[tid]:
+                    in_degree[dep_tid] -= 1
+                    if in_degree[dep_tid] == 0:
+                        next_ready.append(dep_tid)
+            ready = next_ready
+
+        # Mark any remaining unprocessed tasks as None (all are skipped descendants)
+        for tid in task_map:
+            if tid not in results:
+                results[tid] = None
+
+        return results
+
     # ── Build sandbox ──
     sandbox_globals: dict[str, Any] = {
         "agent": _agent,
         "parallel": _parallel,
         "pipeline": _pipeline,
+        "dag": _dag,
         "log": _log,
         "phase": _phase,
         "args": options.args,

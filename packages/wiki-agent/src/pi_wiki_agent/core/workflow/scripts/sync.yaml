@@ -49,13 +49,14 @@ phases:
           no_change_files: [str]
 
   - title: Write
-    mode: parallel
+    mode: dag
     for_each: ${outputs.Plan.file_tasks}
     steps:
       - agent: wiki-writer
         label: write-${item.wiki_page}
         prompt: |
           ## 任务
+          任务 ID: ${item.id}
           源文件: ${item.file}
           目标 Wiki 页面: ${item.wiki_page}
           目标章节: ${item.section}

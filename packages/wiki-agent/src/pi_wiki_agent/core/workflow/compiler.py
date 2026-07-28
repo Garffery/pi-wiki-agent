@@ -335,6 +335,54 @@ def compile_phases(phases: list[dict], variables: dict | None, context: dict) ->
                                 "    ", context)
                 lines.append(f"])")
 
+        # ── Mode: dag ──
+        elif mode == "dag":
+            if for_each:
+                lines.append(f"{phase_var}_items = {resolved_for_each}")
+                lines.append(f"if {phase_var}_items:")
+                lines.append(f"    {phase_var}_dag_tasks = [")
+                for step in steps:
+                    item_context = {**context, "item_var": "it"}
+                    step_agent = step["agent"]
+                    step_label = resolve_expr(step.get("label", step_agent), item_context)
+                    step_prompt = resolve_prompt(step.get("prompt", ""), item_context)
+                    step_schema = compile_schema(step.get("output_schema"))
+                    lines.append("        {'id': it.get('id', f'task-{idx}'),")
+                    lines.append("         'fn': (lambda it2=it: agent(")
+                    lines.append(f"             {_format_prompt(step_prompt)},")
+                    _emit_opts(lines, step_agent, step_label, step_schema, "             ")
+                    lines.append("         )),")
+                    lines.append("         'depends_on': it.get('depends_on', [])},")
+                lines.append(f"        for idx, it in enumerate({phase_var}_items)")
+                lines.append(f"    ]")
+                lines.append(f"    {phase_var}_results_dict = await dag({phase_var}_dag_tasks)")
+                lines.append(f"    {phase_var}_results = [{phase_var}_results_dict.get(it.get('id', f'task-{{idx}}')) for idx, it in enumerate({phase_var}_items)]")
+                lines.append(f"else:")
+                lines.append(f"    {phase_var}_results = []")
+            else:
+                lines.append(f"{phase_var}_dag_tasks = [")
+                for step in steps:
+                    step_agent = step["agent"]
+                    step_label = resolve_expr(step.get("label", step_agent), context)
+                    step_prompt = resolve_prompt(step.get("prompt", ""), context)
+                    step_schema = compile_schema(step.get("output_schema"))
+                    step_id = resolve_expr(step.get("id", f"'{step_agent}'"), context)
+                    step_deps = step.get("depends_on", [])
+                    if isinstance(step_deps, list):
+                        import json
+                        deps_str = json.dumps(step_deps)
+                    else:
+                        deps_str = str(step_deps)
+                    lines.append(f"    {{'id': {step_id},")
+                    lines.append(f"     'fn': lambda: agent(")
+                    lines.append(f"         {_format_prompt(step_prompt)},")
+                    _emit_opts(lines, step_agent, step_label, step_schema, "         ")
+                    lines.append(f"     ),")
+                    lines.append(f"     'depends_on': {deps_str}}},")
+                lines.append(f"]")
+                lines.append(f"{phase_var}_results_dict = await dag({phase_var}_dag_tasks)")
+                lines.append(f"{phase_var}_results = {phase_var}_results_dict")
+
         # ── Mode: pipeline ──
         elif mode == "pipeline":
             lines.append(f"{phase_var}_items = {resolved_for_each}")
