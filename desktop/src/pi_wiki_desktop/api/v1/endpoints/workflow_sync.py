@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -26,7 +27,8 @@ router = APIRouter()
 
 class WorkflowSyncRequest(BaseModel):
     model: str | None = None
-    workflow: str | None = None  # workflow script name, defaults to "sync_commit.py"
+    workflow: str | None = None  # workflow script name, defaults to "sync.yaml"
+    keep_checkpoint: bool = False  # if True, skip checkpoint cleanup (for testing)
 
 
 @router.post("/projects/{name}/workflow-sync/{rev}/stream")
@@ -51,7 +53,9 @@ async def workflow_sync_commit_stream(
     logger.info("========> 提交版本: {}", rev)
 
     # Load pre-written workflow script
-    script_name = body.workflow if body and body.workflow else "sync_commit.py"
+    script_name = body.workflow if body and body.workflow else "sync.yaml"
+    if script_name and "." not in script_name:
+        script_name += ".yaml"
     script = _load_workflow_script(cfg["path"], script_name)
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -88,6 +92,8 @@ async def workflow_sync_commit_stream(
         from pi_wiki_agent.core.workflow_sync import execute_workflow_sync
         from pi_coding_agent.core.auth_storage import AuthStorage
 
+        keep_checkpoint_flag = body.keep_checkpoint if body else False
+
         try:
             result = await execute_workflow_sync(
                 project_path=cfg["path"],
@@ -103,6 +109,7 @@ async def workflow_sync_commit_stream(
                 on_agent_end=on_agent_end,
                 on_phase=on_phase,
                 on_event=on_event,
+                keep_checkpoint=keep_checkpoint_flag,
             )
             await monitor.mark_processed(rev)
             await queue.put({
@@ -141,6 +148,96 @@ async def workflow_sync_commit_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _load_json(path: str) -> dict | None:
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+@router.get("/projects/{name}/workflow-failures")
+def get_workflow_failures(name: str):
+    """List all unfinished workflow runs with checkpoints remaining."""
+    from datetime import datetime
+
+    cfg = load_projects().get(name)
+    if not cfg:
+        raise HTTPException(404, f"项目不存在: {name}")
+
+    project_path = cfg["path"]
+    cp_base = os.path.join(project_path, '.wiki', 'checkpoints')
+    if not os.path.isdir(cp_base):
+        return {"failures": []}
+
+    monitor = create_monitor(project_path)
+    failures = []
+
+    for namespace in sorted(os.listdir(cp_base), reverse=True):
+        ns_dir = os.path.join(cp_base, namespace)
+        if not os.path.isdir(ns_dir):
+            continue
+
+        meta = _load_json(os.path.join(ns_dir, '_meta.json'))
+        analysis = _load_json(os.path.join(ns_dir, 'analysis.json'))
+        plan = _load_json(os.path.join(ns_dir, 'plan.json'))
+        write_results = _load_json(os.path.join(ns_dir, 'write_results.json'))
+        wr_value = (write_results or {}).get('value', {})
+
+        analysis_done = analysis is not None and analysis.get('value') is not None
+        plan_done = plan is not None and plan.get('value') is not None
+        wr_values = [v for v in wr_value.values() if isinstance(v, dict)]
+        wr_total = len(wr_values)
+        wr_completed = sum(1 for v in wr_values if v.get('value') is not None)
+        wr_failed = sum(1 for v in wr_values if v.get('value') is None)
+        wr_done = wr_total > 0 and wr_failed == 0
+
+        # Skip fully completed runs
+        if analysis_done and plan_done and wr_done:
+            continue
+
+        # Try to get commit message
+        commit_msg = None
+        try:
+            commit = monitor.get_commit_sync(namespace)
+            commit_msg = commit.message if commit else None
+        except Exception:
+            pass
+
+        mtimes = [os.path.getmtime(os.path.join(ns_dir, f)) for f in os.listdir(ns_dir)]
+        updated_at = datetime.fromtimestamp(max(mtimes)).isoformat() if mtimes else None
+
+        failures.append({
+            "revision": namespace,
+            "commit_message": commit_msg,
+            "workflow": (meta or {}).get("workflow", "sync_commit"),
+            "phases": {
+                "analysis": {"done": analysis_done},
+                "plan": {"done": plan_done},
+                "write_results": {"done": wr_done, "completed": wr_completed, "total": wr_total, "failed": wr_failed},
+            },
+            "updated_at": updated_at,
+        })
+
+    return {"failures": failures}
+
+
+@router.delete("/projects/{name}/workflow-sync/{rev}/checkpoint")
+def clear_checkpoint(name: str, rev: str):
+    """Clear checkpoint for a specific commit, forcing a fresh run next time."""
+    cfg = load_projects().get(name)
+    if not cfg:
+        raise HTTPException(404, f"项目不存在: {name}")
+
+    project_path = cfg["path"]
+    ns_dir = os.path.join(project_path, '.wiki', 'checkpoints', rev)
+    if os.path.isdir(ns_dir):
+        shutil.rmtree(ns_dir)
+    return {"cleared": True, "namespace": rev}
 
 
 def _load_workflow_script(project_path: str, script_name: str) -> str:

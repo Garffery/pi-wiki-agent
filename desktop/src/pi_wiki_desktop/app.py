@@ -17,8 +17,27 @@ async def lifespan(app: FastAPI):
     from pi_coding_agent.core.auth_storage import AuthStorage
     from .wiki_model_registry import WikiModelRegistry
     app.state.model_registry = WikiModelRegistry(auth_storage=AuthStorage())
+
+    # Start cron scheduler
+    from pi_wiki_agent.cron import scheduler
+    scheduler.start()
+    _register_default_jobs()
+
     yield
+
+    scheduler.shutdown()
     app.state.model_registry = None
+
+
+def _register_default_jobs() -> None:
+    """Register built-in scheduled jobs if configured."""
+    import os
+    from pi_wiki_agent.cron import scheduler
+
+    # These are optional defaults — can be configured via env or config file later
+    # Example: os.environ.get("PI_WIKI_CRON_QUALITY_CHECK", "") == "1"
+    # For now, no jobs are auto-registered — use the API to add them
+    pass
 
 
 def create_app() -> FastAPI:

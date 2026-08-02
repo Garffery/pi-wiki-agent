@@ -1,0 +1,7 @@
+{
+  "changed_files": [
+    "src/taskman/storage.py"
+  ],
+  "commit_message": "feat: add search method to storage",
+  "revision": "case-06"
+}

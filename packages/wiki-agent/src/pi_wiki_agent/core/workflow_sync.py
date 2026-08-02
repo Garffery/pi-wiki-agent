@@ -4,7 +4,7 @@ workflow script, enabling parallel wiki-writer agents.
 
 Usage::
 
-    script = Path(".wiki/workflows/sync_commit.py").read_text()
+    script = Path(".wiki/workflows/sync.yaml").read_text()
     result = await execute_workflow_sync(
         project_path="/data/my-project",
         changed_files=["src/auth.py"],
@@ -41,6 +41,8 @@ async def execute_workflow_sync(
     on_agent_end: Any = None,
     on_phase: Any = None,
     on_event: Any = None,
+    keep_checkpoint: bool = False,
+    extra_args: dict | None = None,
 ) -> Any:
     """Execute a wiki sync using a workflow script.
 
@@ -96,11 +98,10 @@ async def execute_workflow_sync(
     chain_dir = os.path.join(project_path, ".wiki", "chain")
     os.makedirs(chain_dir, exist_ok=True)
 
-    # ── 3. Write per-file diffs (VCS-native, avoids context overflow) ─────
-    diffs_dir = os.path.join(chain_dir, "diffs")
+    # ── 3. Write per-file diffs (isolated by revision) ─────────────────────
+    diffs_dir = os.path.join(chain_dir, "diffs", revision)
     monitor = create_monitor(project_path)
-    diff_files = await monitor.write_file_diffs(revision, changed_files, diffs_dir)
-    logger.info("{} per-file diffs written to {}", len(diff_files), diffs_dir)
+    await monitor.write_file_diffs(revision, changed_files, diffs_dir)
 
     # ── 4. Load workflow agent definitions ─────────────────────────────────
     agent_defs = _load_workflow_agent_defs(project_path)
@@ -115,8 +116,12 @@ async def execute_workflow_sync(
         "affected_sections": affected_text,
         "diffs_dir": diffs_dir,
         "revision": revision,
+        "commit_hash": revision,
         "agent_defs": agent_defs,
+        "keep_checkpoint": keep_checkpoint,
     }
+    if extra_args:
+        args.update(extra_args)
 
     # ── 6. Resolve model string → Model object ────────────────────────────
     resolved_model = _resolve_model(model, model_registry)
@@ -127,17 +132,10 @@ async def execute_workflow_sync(
         f"{resolved_model.provider}:{resolved_model.id}" if resolved_model and hasattr(resolved_model, "provider") else "N/A",
     )
 
-    # ── 7. Compile YAML → Python if needed ────────────────────────────────
-    if script.strip().startswith(("meta =", "meta=", "export const")):
-        pass  # Already Python script
-    else:
-        try:
-            from .workflow.compiler import compile_workflow_yaml
-            script = compile_workflow_yaml(script, agent_defs)
-            logger.info("Compiled YAML workflow → {} bytes Python script", len(script))
-        except Exception:
-            logger.warning("YAML compilation failed, trying as raw script")
-            # If it fails, try as raw Python anyway
+    # ── 7. Compile YAML → Python ──────────────────────────────────────────
+    from .workflow.ast_compiler import compile_workflow_yaml
+    script = compile_workflow_yaml(script, agent_defs)
+    logger.info("Compiled YAML workflow → {} bytes Python script", len(script))
 
     # ── 8. Create WorkflowAgent ────────────────────────────────────────────
     from .workflow import WorkflowAgent
@@ -166,12 +164,9 @@ async def execute_workflow_sync(
     logger.info("工作流的最终结果:{}",result)
 
     # ── 10. Cleanup temp diffs ─────────────────────────────────────────────
+    import shutil
     try:
-        for f in diff_files:
-            os.remove(os.path.join(diffs_dir, f))
-        os.rmdir(diffs_dir)
-        if not os.listdir(chain_dir):
-            os.rmdir(chain_dir)
+        shutil.rmtree(diffs_dir)
     except OSError:
         pass
 
@@ -229,19 +224,19 @@ def _load_workflow_agent_defs(project_path: str) -> dict:
     return agent_defs
 
 
-def load_workflow_script(project_path: str, script_name: str = "sync_commit.py") -> str:
-    """Load a workflow script from .wiki/workflows/.
+def load_workflow_script(project_path: str, script_name: str = "sync.yaml") -> str:
+    """Load a workflow script from .wiki/workflows/ (YAML format).
 
     Parameters
     ----------
     project_path:
         Project root directory.
     script_name:
-        Script filename (default: sync_commit.py).
+        Script filename (default: sync.yaml).
 
     Returns
     -------
-    The raw script text.
+    The raw YAML text (will be compiled to Python by execute_workflow_sync).
     """
     script_path = Path(project_path) / ".wiki" / "workflows" / script_name
     if not script_path.exists():

@@ -1,0 +1,5 @@
+{
+  "changed_files": ["src/taskman/models.py"],
+  "commit_message": "refactor: change Task status enum and extend to_dict",
+  "revision": "case-02"
+}

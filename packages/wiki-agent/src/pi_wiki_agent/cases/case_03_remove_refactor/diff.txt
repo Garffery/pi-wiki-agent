@@ -1,0 +1,10 @@
+diff --git a/src/taskman/cli.py b/src/taskman/cli.py
+--- a/src/taskman/cli.py
++++ b/src/taskman/cli.py
+@@ -60,12 +60,0 @@ def export_tasks(output: str = "tasks.json"):
+
+-@app.command()
+-def sync_legacy():
+-    """[DEPRECATED] Legacy sync command, use 'sync' instead."""
+-    print("This command is deprecated. Use 'taskman sync' instead.")
+-    return sync_v2()

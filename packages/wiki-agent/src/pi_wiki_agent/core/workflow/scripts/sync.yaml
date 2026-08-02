@@ -1,4 +1,4 @@
-name: wiki_sync
+name: sync
 description: 分析 VCS 提交并更新 wiki 页面
 concurrency: 8
 
@@ -41,11 +41,11 @@ phases:
           3. 调用 structured_output 工具返回结果
         output_schema:
           file_tasks:
-            file: str
-            wiki_page: str
-            section: str?
-            action: {enum: [create, update, delete]}
-            instructions: str
+            - file: str
+              wiki_page: str
+              section: str?
+              action: {enum: [create, update, delete]}
+              instructions: str
           no_change_files: [str]
 
   - title: Write

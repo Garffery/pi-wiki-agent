@@ -7,6 +7,7 @@ Each agent() call spawns a fresh AgentSession that runs in a temp session direct
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from pi_ai.types import AssistantMessage, TextContent
@@ -35,6 +36,7 @@ class WorkflowAgent:
         self.model_registry = model_registry or ModelRegistry()
         self.auth_storage = auth_storage or AuthStorage()
         self.extra_tools = extra_tools or []
+        self.last_session_path: str | None = None
 
     async def run(
         self,
@@ -48,6 +50,7 @@ class WorkflowAgent:
         active_tools: list[str] | None = None,
         system_prompt: str | None = None,
         skill_names: list[str] | None = None,
+        resume_from: str | None = None,
     ) -> Any:
         """
         Run a subagent with the given prompt.
@@ -62,6 +65,7 @@ class WorkflowAgent:
             active_tools: Optional tool name whitelist (None = all 7 built-in tools).
             system_prompt: Optional role-specific system prompt override.
             skill_names: Optional skill names to load and inject into system prompt.
+            resume_from: Optional path to an existing JSONL session file to resume.
 
         Returns:
             Subagent's final text output, or validated object if schema is provided.
@@ -123,16 +127,29 @@ class WorkflowAgent:
             provider=self.model.provider if self.model else None,
         )
 
-        # ── Create session ──
-        session = AgentSession(
-            cwd=self.cwd,
-            model=self.model,
-            settings=settings,
-            session_manager=SessionManager.in_memory(self.cwd),
-            auth_storage=self.auth_storage,
-            model_registry=self.model_registry,
-            extra_tools=subagent_tools,
-        )
+        # ── Create session (resume or new) ──
+        if resume_from and os.path.exists(resume_from):
+            session = AgentSession(
+                cwd=self.cwd,
+                model=self.model,
+                settings=settings,
+                session_manager=SessionManager.open(resume_from),
+                auth_storage=self.auth_storage,
+                model_registry=self.model_registry,
+                extra_tools=subagent_tools,
+            )
+            self.last_session_path = resume_from
+        else:
+            session = AgentSession(
+                cwd=self.cwd,
+                model=self.model,
+                settings=settings,
+                session_manager=SessionManager.in_memory(self.cwd),
+                auth_storage=self.auth_storage,
+                model_registry=self.model_registry,
+                extra_tools=subagent_tools,
+            )
+            self.last_session_path = session._session_manager.get_session_file()
 
         # Ensure structured_output is active when schema is used
         if active_tools and capture:

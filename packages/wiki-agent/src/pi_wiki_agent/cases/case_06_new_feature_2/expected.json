@@ -1,0 +1,11 @@
+{
+  "name": "新增功能 #2 — storage 搜索方法",
+  "should_modify_pages": [
+    "configuration.md"
+  ],
+  "should_not_modify_pages": [
+    "api-reference.md",
+    "faq.md"
+  ],
+  "quality_should_improve": true
+}

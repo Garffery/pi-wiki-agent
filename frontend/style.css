@@ -504,3 +504,41 @@ pre.wf-agent-log {
 .q-page { font-weight: 500; word-break: break-all; }
 .q-section { color: var(--text-secondary); font-weight: 400; }
 .q-msg { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+
+/* Failure / resume */
+.row-failure { border-left: 3px solid var(--warning, #F59E0B); }
+.failure-badge {
+  display: inline-block; margin-left: 8px; padding: 1px 8px;
+  border-radius: 10px; font-size: 11px; font-weight: 500;
+  background: #FEF3C7; color: #D97706;
+}
+.failure-hint {
+  font-size: 13px; color: #D97706; margin-bottom: 8px;
+  padding: 8px 12px; background: #FFFBEB; border-radius: 6px;
+  border: 1px solid #FDE68A;
+}
+.keep-checkpoint-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  user-select: none; margin-right: 12px;
+}
+.keep-checkpoint-toggle input { cursor: pointer; }
+
+/* Failure list */
+.failure-list {
+  margin-bottom: 16px; border: 1px solid #FDE68A; border-radius: 8px;
+  background: #FFFBEB; overflow: hidden;
+}
+.failure-list-header {
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  color: #D97706; border-bottom: 1px solid #FDE68A;
+}
+.failure-list-item {
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  cursor: pointer; border-bottom: 1px solid #FEF3C7; font-size: 13px;
+}
+.failure-list-item:last-child { border-bottom: none; }
+.failure-list-item:hover, .failure-list-item.selected { background: #FEF3C7; }
+.failure-list-msg { flex: 1; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failure-list-progress { color: #92400E; font-size: 12px; white-space: nowrap; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }

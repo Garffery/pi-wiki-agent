@@ -1,0 +1,65 @@
+name: fix_quality
+description: Fix wiki quality issues detected by WikiQualityChecker
+concurrency: 8
+
+phases:
+  - title: Analyze
+    steps:
+      - agent: quality-analyzer
+        label: quality analysis
+        prompt: |
+          ## 质量检查报告
+
+          项目路径: ${project_path}
+          检查时间: ${quality_report.checked_at}
+          总页面: ${quality_report.total_pages}
+          总问题: ${quality_report.total_issues}
+          错误: ${quality_report.errors}
+          警告: ${quality_report.warnings}
+
+          ### 问题列表
+          ${join(quality_report.issues, "- [${item.severity}] ${item.page}: ${item.message} (类型: ${item.check})")}
+
+          请分析以上质量报告，阅读涉及的 wiki 页面，生成结构化的问题分析。
+          输出格式见 system prompt。
+
+  - title: Plan
+    steps:
+      - agent: fix-planner
+        label: fix planning
+        prompt: |
+          基于以下质量分析报告，为每个需要修复的 wiki 页面生成精确的修复指令：
+
+          ${previous}
+
+          要求：
+          1. 同一 wiki 页面的多个问题合并为一条 fix task
+          2. 每条 task 分配唯一 id（如 "fix-1"）
+          3. 如果修复 B 页面的内容依赖修复 A 页面的结果，在 B 的 depends_on 中列出 A 的 id
+          4. instructions 要精确可执行
+          5. 调用 structured_output 工具返回结果
+        output_schema:
+          fix_tasks:
+            - id: str
+              wiki_page: str
+              issues_summary: str?
+              instructions: str
+              depends_on: [str]
+
+  - title: Fix
+    mode: dag
+    for_each: ${outputs.Plan.fix_tasks}
+    steps:
+      - agent: page-fixer
+        label: fix-${item.wiki_page}
+        prompt: |
+          ## 修复任务
+          任务 ID: ${item.id}
+          目标 Wiki 页面: ${item.wiki_page}
+          问题概要: ${item.issues_summary}
+          修复指令: ${item.instructions}
+
+          ## 项目上下文
+          项目路径: ${project_path}
+
+          请根据上述指令修复 wiki 页面。完成后简要说明每个修复做了什么。

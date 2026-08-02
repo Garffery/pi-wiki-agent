@@ -65,6 +65,7 @@
             <div class="settings-tabs">
               <button :class="{ active: settingsTab === 'models' }" @click="settingsTab = 'models'">模型</button>
               <button :class="{ active: settingsTab === 'filters' }" @click="settingsTab = 'filters'">过滤器</button>
+              <button :class="{ active: settingsTab === 'cron' }" @click="settingsTab = 'cron'; loadCronJobs()">定时任务</button>
             </div>
 
             <!-- Models tab -->
@@ -162,6 +163,62 @@
                 </div>
               </template>
             </div>
+
+            <!-- Cron tab -->
+            <div v-if="settingsTab === 'cron'" class="settings-card">
+              <div class="settings-section">
+                <h4>定时任务 (APScheduler)</h4>
+                <p class="modal-desc">管理自动执行的质量检查和 VCS 同步任务</p>
+                <table class="model-table" v-if="cronJobs.length > 0">
+                  <thead>
+                    <tr><th>ID</th><th>名称</th><th>触发器</th><th>下次运行</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="j in cronJobs" :key="j.id">
+                      <td><code>{{ j.id }}</code></td>
+                      <td>{{ j.name }}</td>
+                      <td><code>{{ j.trigger }}</code></td>
+                      <td>{{ j.next_run ? new Date(j.next_run).toLocaleString() : '-' }}</td>
+                      <td><button class="btn-ghost btn-danger" @click="removeCronJob(j.id)">删除</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p v-else class="empty-text">暂无定时任务</p>
+              </div>
+              <div class="settings-divider"></div>
+              <div class="settings-section">
+                <h4>添加任务</h4>
+                <p class="modal-desc">Cron 表达式：分 时 日 月 周。常用：每天凌晨2点= 0 2 * * * ，每小时= 0 * * * *</p>
+                <form @submit.prevent="addCronJob">
+                  <div class="form-row">
+                    <div style="flex:3"><label class="form-label">项目路径</label>
+                      <input class="form-input" v-model="newCronJob.project_path" required placeholder="D:/project/my-wiki-project">
+                    </div>
+                    <div style="flex:2"><label class="form-label">任务类型</label>
+                      <select class="form-input" v-model="newCronJob.task">
+                        <option value="quality_check">质量检查</option>
+                        <option value="vcs_poll">VCS 轮询</option>
+                      </select>
+                    </div>
+                    <div><label class="form-label">任务 ID</label>
+                      <input class="form-input" v-model="newCronJob.job_id" required placeholder="daily-check">
+                    </div>
+                    <div style="flex:2"><label class="form-label">名称</label>
+                      <input class="form-input" v-model="newCronJob.name" placeholder="每日质量检查">
+                    </div>
+                  </div>
+                  <label class="form-label">Cron 时间</label>
+                  <div class="form-row">
+                    <div><label class="form-label" style="font-size:11px;color:var(--text2)">分</label><input class="form-input" v-model="newCronJob.minute" placeholder="0"></div>
+                    <div><label class="form-label" style="font-size:11px;color:var(--text2)">时</label><input class="form-input" v-model="newCronJob.hour" placeholder="2"></div>
+                    <div><label class="form-label" style="font-size:11px;color:var(--text2)">日</label><input class="form-input" v-model="newCronJob.day" placeholder="*"></div>
+                    <div><label class="form-label" style="font-size:11px;color:var(--text2)">月</label><input class="form-input" v-model="newCronJob.month" placeholder="*"></div>
+                    <div><label class="form-label" style="font-size:11px;color:var(--text2)">周</label><input class="form-input" v-model="newCronJob.day_of_week" placeholder="*"></div>
+                  </div>
+                  <button type="submit" class="btn-primary" style="margin-top:12px">添加</button>
+                </form>
+              </div>
+            </div>
           </template>
 
           <!-- ═══ Commits View (default) ═══ -->
@@ -187,6 +244,23 @@
               </div>
             </div>
 
+            <div v-if="failures.length > 0" class="failure-list">
+              <div class="failure-list-header">↻ 可续跑的同步 ({{ failures.length }})</div>
+              <div v-for="f in failures" :key="f.revision" class="failure-list-item"
+                   :class="{ selected: selectedCommit === f.revision }"
+                   @click="previewCommit(f.revision)">
+                <code>{{ f.revision.slice(0, 8) }}</code>
+                <span class="failure-list-msg">{{ f.commit_message || '(无提交信息)' }} <code style="font-size:11px;color:var(--text2)">{{ f.workflow }}</code></span>
+                <span class="failure-list-progress">
+                  {{ f.phases.analysis.done ? '✓' : '○' }} 分析
+                  {{ f.phases.plan.done ? '✓' : '○' }} 规划
+                  {{ f.phases.write_results.total > 0 ? f.phases.write_results.completed + '/' + f.phases.write_results.total + ' 写入' : '' }}
+                </span>
+                <button class="btn-primary btn-sm" @click.stop="syncMode='workflow'; f.workflow === 'fix_quality' ? runQualityFix() : syncCommit(f.revision)">续跑</button>
+                <button class="btn-secondary btn-sm" @click.stop="startFresh(f.revision)">重跑</button>
+              </div>
+            </div>
+
             <div v-if="commits.length === 0 && !loading" class="empty-card">暂无待处理提交</div>
             <div v-if="loading" class="loading-text">加载中...</div>
 
@@ -196,10 +270,12 @@
               </thead>
               <tbody>
                 <tr v-for="c in commits" :key="c.revision"
-                    :class="{ selected: selectedCommit === c.revision }"
+                    :class="{ selected: selectedCommit === c.revision, 'row-failure': getFailure(c.revision) }"
                     @click="previewCommit(c.revision)">
                   <td><code>{{ c.revision.slice(0, 8) }}</code></td>
-                  <td>{{ c.message }}</td>
+                  <td>{{ c.message }}
+                    <span v-if="getFailure(c.revision)" class="failure-badge" :title="'可续跑: ' + getFailure(c.revision).phases.write_results.completed + '/' + getFailure(c.revision).phases.write_results.total + ' tasks done'">↻ 可续跑</span>
+                  </td>
                   <td class="col-right">{{ c.files.length }}</td>
                 </tr>
               </tbody>
@@ -237,6 +313,36 @@
                   <span class="quality-warn">{{ qualityReport.warnings }} warning</span>
                   <template v-if="qualityReport.checked_at"> · {{ new Date(qualityReport.checked_at).toLocaleString() }}</template>
                 </p>
+              </div>
+              <div v-if="qualityReport.total_issues > 0" style="padding:0 16px 12px">
+                <button class="btn-primary" @click="runQualityFix" :disabled="fixing" style="background:#8B5CF6">
+                  {{ fixing ? '修复中...' : '一键修复 (' + qualityReport.total_issues + ' 个问题)' }}
+                </button>
+                <div v-if="fixing && wfAgents.length > 0" class="chain-steps" style="margin-top:8px">
+                  <div v-if="wfPhase" class="wf-phase-label">{{ wfPhase }}</div>
+                  <div v-for="a in wfAgents" :key="a.label" class="wf-agent-card"
+                       :class="{ done: a.status === 'done', error: a.status === 'error', running: a.status === 'running' }">
+                    <div class="chain-step">
+                      <span class="step-status-icon">{{ a.status === 'done' ? '✓' : a.status === 'error' ? '✗' : '●' }}</span>
+                      <span class="step-name">{{ a.label }}</span>
+                      <span class="step-state">{{ a.status === 'running' ? '执行中' : a.status === 'done' ? '完成' : '失败' }}</span>
+                      <span v-if="a.error" class="step-error">{{ a.error }}</span>
+                    </div>
+                    <div v-if="a.tools && a.tools.length > 0" class="stream-tools" style="padding-left:24px">
+                      <div v-for="t in a.tools" :key="a.label + t.name" class="stream-tool"
+                           :class="{ done: t.status === 'done', error: t.status === 'error', running: t.status === 'running' }">
+                        <span class="tool-dot"></span>
+                        <span class="tool-name">{{ t.name }}</span>
+                        <span class="tool-status">{{ t.status === 'running' ? '执行中' : t.status === 'done' ? '完成' : '失败' }}</span>
+                      </div>
+                    </div>
+                    <pre v-if="a.log && a.status === 'running'" class="stream-output wf-agent-log">{{ a.log }}</pre>
+                    <details v-if="a.log && a.status !== 'running'" class="wf-log-details">
+                      <summary>查看输出</summary>
+                      <pre class="stream-output wf-agent-log">{{ a.log }}</pre>
+                    </details>
+                  </div>
+                </div>
               </div>
               <div v-if="qualityReport.total_issues === 0" class="empty-text" style="padding:16px">
                 未发现问题，wiki 质量良好
@@ -299,9 +405,25 @@
                     <input type="radio" v-model="syncMode" value="workflow"> Workflow 并行
                   </label>
                 </div>
-                <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
-                  {{ syncing ? '同步中...' : '同步此提交' }}
-                </button>
+                <label class="keep-checkpoint-toggle" v-if="syncMode === 'workflow'" title="勾选后成功的 checkpoint 不会被清理，用于测试 resume">
+                  <input type="checkbox" v-model="keepCheckpoint"> 保留 checkpoint (调试)
+                </label>
+                <template v-if="getFailure(commitDetail.revision) && syncMode === 'workflow'">
+                  <div class="failure-hint">
+                    ↻ 上次运行未完成：{{ getFailure(commitDetail.revision).phases.write_results.completed }}/{{ getFailure(commitDetail.revision).phases.write_results.total }} tasks done
+                  </div>
+                  <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
+                    {{ syncing ? '同步中...' : '↻ 续跑' }}
+                  </button>
+                  <button class="btn-secondary" @click="startFresh(commitDetail.revision)" :disabled="syncing">
+                    重跑
+                  </button>
+                </template>
+                <template v-else>
+                  <button class="btn-primary" @click="syncCommit(commitDetail.revision)" :disabled="syncing">
+                    {{ syncing ? '同步中...' : '同步此提交' }}
+                  </button>
+                </template>
                 <div v-if="syncing && (streamText || streamTools.length > 0 || chainSteps.length > 0 || wfAgents.length > 0)" class="stream-panel">
                   <!-- Workflow progress -->
                   <div v-if="syncMode === 'workflow' && wfAgents.length > 0" class="chain-steps">
@@ -385,6 +507,6 @@
   </div>
 
   <script src="vue.global.prod.js"></script>
-  <script src="app.js?v=20250725-2"></script>
+  <script src="app.js?v=20250801-9"></script>
 </body>
 </html>

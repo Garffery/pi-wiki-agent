@@ -1,0 +1,6 @@
+{
+  "name": "修改行为 — Task 状态枚举重构",
+  "should_modify_pages": ["architecture.md"],
+  "should_not_modify_pages": ["api-reference.md", "faq.md"],
+  "quality_should_improve": true
+}

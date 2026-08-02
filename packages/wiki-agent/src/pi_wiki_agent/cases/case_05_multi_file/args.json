@@ -1,0 +1,8 @@
+{
+  "changed_files": [
+    "src/taskman/cli.py",
+    "src/taskman/storage.py"
+  ],
+  "commit_message": "feat: add export command and update storage format",
+  "revision": "case-05"
+}

@@ -1,0 +1,11 @@
+{
+  "name": "删除/重构 — 移除废弃命令",
+  "should_modify_pages": [
+    "api-reference.md"
+  ],
+  "should_not_modify_pages": [
+    "architecture.md",
+    "configuration.md"
+  ],
+  "quality_should_improve": true
+}

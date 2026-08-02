@@ -1,0 +1,9 @@
+{
+  "name": "纯文档 (No-op) — 仅修改 README",
+  "should_modify_pages": [],
+  "quality_should_improve": false,
+  "plan_file_tasks_should_be_empty": true,
+  "plan_no_change_files_should_include": [
+    "README.md"
+  ]
+}

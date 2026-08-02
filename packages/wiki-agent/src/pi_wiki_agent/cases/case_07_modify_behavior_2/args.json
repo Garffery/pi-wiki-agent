@@ -1,0 +1,7 @@
+{
+  "changed_files": [
+    "src/taskman/cli.py"
+  ],
+  "commit_message": "fix: widen status column and add priority to list output",
+  "revision": "case-07"
+}

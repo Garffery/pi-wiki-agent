@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from pi_wiki_agent.logging import logger
+from .checkpoint import CheckpointStore
 
 
 # ============================================================================
@@ -45,6 +46,7 @@ class AgentOptions:
     isolation: str | None = None
     agent_type: str | None = None
     agent: str | None = None  # agent definition name → lookup in args['agent_defs']
+    resume_from: str | None = None  # path to existing JSONL session to resume
 
 
 @dataclass
@@ -301,11 +303,12 @@ def _normalize_agent_options(value: Any) -> AgentOptions:
     return AgentOptions(
         label=_optional_str(value.get("label"), "agent label"),
         phase=_optional_str(value.get("phase"), "agent phase"),
-        schema=value.get("schema"),
+        schema=_normalize_schema(value.get("schema")),
         model=_optional_str(value.get("model"), "agent model"),
         isolation=_optional_str(value.get("isolation"), "agent isolation"),
         agent_type=_optional_str(value.get("agentType") or value.get("agent_type"), "agent type"),
         agent=_optional_str(value.get("agent"), "agent name"),
+        resume_from=_optional_str(value.get("resume_from"), "agent resume_from"),
     )
 
 
@@ -313,6 +316,18 @@ def _require_str(value: Any, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     return value
+
+
+def _normalize_schema(value: Any) -> dict | None:
+    """Normalize schema to a dict. Handles JSON strings from YAML compilation."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        import json as _json
+        return _json.loads(value)
+    return None
 
 
 def _optional_str(value: Any, name: str) -> str | None:
@@ -446,8 +461,7 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
             try:
                 instructions = _build_agent_instructions(assigned_phase, norm_opts)
                 _log(f"agent [{label}] starting (phase={assigned_phase}, schema={'yes' if norm_opts.schema else 'no'}, agent={norm_opts.agent}, tools={agent_active_tools})")
-                result = await agent_runner.run(
-                    task_prompt,
+                run_kwargs: dict[str, Any] = dict(
                     label=label,
                     schema=norm_opts.schema,
                     instructions=instructions,
@@ -457,6 +471,9 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
                     system_prompt=agent_system_prompt,
                     skill_names=agent_skill_names,
                 )
+                if norm_opts.resume_from:
+                    run_kwargs["resume_from"] = norm_opts.resume_from
+                result = await agent_runner.run(task_prompt, **run_kwargs)
                 _check_aborted()
                 state["spent"] += _estimate_tokens(result)
                 _log(f"agent [{label}] done: {str(result)[:120]}")
@@ -523,10 +540,12 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
         return await asyncio.gather(*[_run_item(item, i) for i, item in enumerate(items)])
 
     # ── dag ──
-    async def _dag(tasks: list):
+    async def _dag(tasks: list, seed: dict | None = None):
         """Execute tasks respecting DAG dependencies with maximum concurrency.
 
         Each task: {"id": str, "fn": callable, "depends_on": list[str]}
+        seed: optional dict of already-completed results {"task-1": "result", ...}
+              Tasks whose id is in seed with a non-None value are skipped.
         Returns: dict mapping task id to its result (None if skipped or failed).
         """
         _check_aborted()
@@ -535,6 +554,8 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
 
         if not tasks:
             return {}
+
+        seed = seed or {}
 
         # ---- Validate task structure and build lookup ----
         task_map: dict = {}
@@ -597,7 +618,15 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
         results: dict[str, Any] = {}
         failed: set[str] = set()
 
-        ready = [tid for tid, deg in in_degree.items() if deg == 0]
+        # ---- Seed: pre-populate results from previous run ----
+        for tid, value in seed.items():
+            if tid in task_map and value is not None:
+                results[tid] = value
+                # Reduce in_degree of dependents so they can become ready
+                for dep_tid in dependents[tid]:
+                    in_degree[dep_tid] -= 1
+
+        ready = [tid for tid, deg in in_degree.items() if deg == 0 and tid not in results]
 
         while ready:
             async def _run_one(tid):
@@ -644,6 +673,16 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
 
         return results
 
+    # ── checkpoint ──
+    _checkpoint = CheckpointStore(
+        os.path.join(options.cwd or os.getcwd(), '.wiki/checkpoints'),
+        namespace=(options.args or {}).get('commit_hash') or 'default',
+    )
+
+    # ── agent_session_path ──
+    def _agent_session_path() -> str | None:
+        return agent_runner.last_session_path
+
     # ── Build sandbox ──
     sandbox_globals: dict[str, Any] = {
         "agent": _agent,
@@ -652,6 +691,8 @@ async def run_workflow(script: str, options: WorkflowRunOptions | None = None) -
         "dag": _dag,
         "log": _log,
         "phase": _phase,
+        "checkpoint": _checkpoint,
+        "agent_session_path": _agent_session_path,
         "args": options.args,
         "cwd": options.cwd or os.getcwd(),
         "budget": _Budget(),

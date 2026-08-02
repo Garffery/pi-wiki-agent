@@ -1,0 +1,23 @@
+diff --git a/src/taskman/models.py b/src/taskman/models.py
+--- a/src/taskman/models.py
++++ b/src/taskman/models.py
+@@ -10,9 +10,9 @@ class TaskStatus(Enum):
+-    PENDING = "pending"
++    TODO = "todo"
++    IN_PROGRESS = "in_progress"
+     DONE = "done"
+
+ @dataclass
+ class Task:
+-    status: str = TaskStatus.PENDING.value
++    status: str = TaskStatus.TODO.value
+     title: str = ""
+@@ -30,7 +31,9 @@ class Task:
+     def to_dict(self) -> dict:
+         return {
+-            "status": self.status,
++            "status": self.status,
++            "title": self.title,
++            "description": self.description,
+             "created_at": self.created_at.isoformat(),
+         }

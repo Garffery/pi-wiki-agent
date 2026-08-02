@@ -1,0 +1,11 @@
+diff --git a/src/taskman/storage.py b/src/taskman/storage.py
+--- a/src/taskman/storage.py
++++ b/src/taskman/storage.py
+@@ -30,6 +30,15 @@ class JSONStorage:
++    def search(self, keyword: str) -> list[dict]:
++        """Search tasks by keyword in title or description."""
++        results = []
++        for task in self._read_all().values():
++            if keyword.lower() in task.get('title', '').lower() or keyword.lower() in task.get('description', '').lower():
++                results.append(task)
++        return results

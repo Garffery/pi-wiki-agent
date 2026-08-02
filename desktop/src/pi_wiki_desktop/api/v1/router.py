@@ -13,6 +13,7 @@ from .endpoints import (
     quality,
     generation,
     workflow_sync,
+    cron,
 )
 
 router = APIRouter(prefix="/api")
@@ -27,3 +28,4 @@ router.include_router(chain.router)
 router.include_router(quality.router)
 router.include_router(generation.router)
 router.include_router(workflow_sync.router)
+router.include_router(cron.router)

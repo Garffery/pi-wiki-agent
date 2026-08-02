@@ -6,9 +6,9 @@ Core primitives:
     parse_workflow_script(script)  — validate and split script into meta + body
     WorkflowAgent                  — spawns in-memory subagent sessions
 
-Usage (pre-written script, not model-generated)::
+Usage (YAML workflow, compiled at runtime)::
 
-    script = Path(".wiki/workflows/sync_commit.py").read_text()
+    script = Path(".wiki/workflows/sync.yaml").read_text()
     agent = WorkflowAgent(cwd=project_path, model=model, ...)
     result = await run_workflow(script, WorkflowRunOptions(
         args={"changed_files": [...]},

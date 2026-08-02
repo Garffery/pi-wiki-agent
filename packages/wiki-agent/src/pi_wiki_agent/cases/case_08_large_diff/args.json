@@ -1,0 +1,7 @@
+{
+  "changed_files": [
+    "src/taskman/models.py"
+  ],
+  "commit_message": "feat: add 50 task types to enum",
+  "revision": "case-08"
+}

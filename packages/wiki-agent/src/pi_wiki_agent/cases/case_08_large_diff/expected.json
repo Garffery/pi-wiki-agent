@@ -1,0 +1,7 @@
+{
+  "name": "大 diff — 50 种 TaskType 枚举",
+  "should_modify_pages": [
+    "architecture.md"
+  ],
+  "quality_should_improve": true
+}

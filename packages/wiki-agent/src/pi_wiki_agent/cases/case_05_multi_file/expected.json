@@ -1,0 +1,11 @@
+{
+  "name": "多文件混合 — CLI + Storage 同时修改",
+  "should_modify_pages": [
+    "api-reference.md",
+    "configuration.md"
+  ],
+  "should_not_modify_pages": [
+    "faq.md"
+  ],
+  "quality_should_improve": true
+}

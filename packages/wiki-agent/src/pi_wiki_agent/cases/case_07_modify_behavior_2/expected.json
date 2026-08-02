@@ -1,0 +1,11 @@
+{
+  "name": "修改行为 #2 — CLI 输出格式调整",
+  "should_modify_pages": [
+    "api-reference.md"
+  ],
+  "should_not_modify_pages": [
+    "architecture.md",
+    "configuration.md"
+  ],
+  "quality_should_improve": true
+}

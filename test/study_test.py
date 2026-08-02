@@ -1,4 +1,4 @@
-from pi_wiki_agent.core.workflow.compiler import _find_top_level_comma, _resolve_var_bare
+from pi_wiki_agent.core.workflow.ast_compiler.resolver import _find_top_level_comma, _resolve_bare as _resolve_var_bare
 
 
 def _resolve_join(expr: str, context: dict) -> str:

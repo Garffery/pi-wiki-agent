@@ -1,0 +1,5 @@
+{
+  "changed_files": ["src/taskman/cli.py"],
+  "commit_message": "feat: add export command to CLI",
+  "revision": "case-01"
+}

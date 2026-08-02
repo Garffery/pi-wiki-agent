@@ -20,6 +20,8 @@ createApp({
       chainSteps: [],
       wfAgents: [],     // workflow agent status list
       wfPhase: '',      // current workflow phase
+      failures: [],     // [{ revision, commit_message, phases, updated_at }]
+      keepCheckpoint: false,  // debug: skip checkpoint cleanup
       showAddProject: false,
       newProject: { name: '', path: '', start_revision: '' },
       addError: '',
@@ -35,6 +37,9 @@ createApp({
       filterError: '',
       checking: false,
       qualityReport: null,
+      fixing: false,
+      cronJobs: [],
+      newCronJob: { task: 'quality_check', job_id: '', name: '', project_path: '', minute: '0', hour: '2', day: '*', month: '*', day_of_week: '*' },
       generating: false,
       genProgress: [],
       selectedProjectObj: null,
@@ -85,7 +90,7 @@ createApp({
       this.qualityReport = null; this.genProgress = []
       this.selectedProjectObj = this.projects.find(p => p.name === name) || null
       this.currentView = 'commits'
-      await Promise.all([this.refreshCommits(), this.loadFilters()])
+      await Promise.all([this.refreshCommits(), this.loadFilters(), this.refreshFailures()])
     },
 
     async refreshCommits() {
@@ -93,6 +98,30 @@ createApp({
       this.loading = true
       try { const r = await fetch(`${API}/projects/${this.selectedProject}/commits`); this.commits = await r.json() } catch (e) { console.error(e) }
       this.loading = false
+    },
+
+    async refreshFailures() {
+      if (!this.selectedProject) return
+      try {
+        const r = await fetch(`${API}/projects/${this.selectedProject}/workflow-failures`)
+        this.failures = (await r.json()).failures || []
+      } catch (e) { console.error(e) }
+    },
+
+    getFailure(rev) {
+      return this.failures.find(f => f.revision === rev) || null
+    },
+
+    async startFresh(rev) {
+      const f = this.getFailure(rev)
+      await fetch(`${API}/projects/${this.selectedProject}/workflow-sync/${rev}/checkpoint`, { method: 'DELETE' })
+      this.failures = this.failures.filter(f => f.revision !== rev)
+      this.keepCheckpoint = false
+      if (f?.workflow === 'fix_quality') {
+        this.runQualityFix()
+      } else {
+        this.syncCommit(rev)
+      }
     },
 
     async previewCommit(rev) {
@@ -105,8 +134,8 @@ createApp({
       this.streamText = '正在启动同步...\n'
       console.log('[syncCommit] syncMode:', this.syncMode, 'rev:', rev)
       if (this.syncMode === 'workflow') {
-        console.log('[syncCommit] → WORKFLOW 并行模式')
-        await this._workflowSyncStream(rev)
+        const f = this.getFailure(rev)
+        await this._workflowSyncStream(rev, f?.workflow)
       } else if (this.syncMode === 'chain') {
         console.log('[syncCommit] → CHAIN 链式模式')
         await this._chainSyncStream(rev)
@@ -196,9 +225,13 @@ createApp({
       }
     },
 
-    async _workflowSyncStream(rev) {
+    async _workflowSyncStream(rev, workflowName) {
       this.streamText = ''
-      const body = this.selectedModel ? JSON.stringify({ model: this.selectedModel }) : undefined
+      const bodyObj = {}
+      if (this.selectedModel) bodyObj.model = this.selectedModel
+      if (this.keepCheckpoint) bodyObj.keep_checkpoint = true
+      if (workflowName) bodyObj.workflow = workflowName
+      const body = Object.keys(bodyObj).length > 0 ? JSON.stringify(bodyObj) : undefined
       const url = `${API}/projects/${this.selectedProject}/workflow-sync/${rev}/stream`
       console.log('[workflow] 请求:', url)
       try {
@@ -242,6 +275,7 @@ createApp({
                   console.log('[workflow] done:', evt.success, 'agents:', evt.agent_count, 'duration:', evt.duration_ms, 'ms')
                   this.syncResult = { success: evt.success, error: evt.error, pages: evt.result?.phase3_write?.results || [] }
                   this.syncing = false
+                  await this.refreshFailures()
                   if (evt.success) {
                     this.selectedCommit = ''
                     this.commitDetail = null
@@ -473,6 +507,78 @@ createApp({
         this.qualityReport = { total_issues: -1, issues: [], error: e.message }
       }
       this.checking = false
+    },
+
+    // ── Cron ──────────────────────────────────────────────────────────
+    async loadCronJobs() {
+      try { const r = await fetch(`${API}/cron/jobs`); this.cronJobs = (await r.json()).jobs || [] } catch (e) { console.error(e) }
+    },
+    async addCronJob() {
+      try {
+        await fetch(`${API}/cron/jobs`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.newCronJob),
+        })
+        this.newCronJob = { task: 'quality_check', job_id: '', name: '', project_path: '', minute: '0', hour: '2', day: '*', month: '*', day_of_week: '*' }
+        await this.loadCronJobs()
+      } catch (e) { console.error(e) }
+    },
+    async removeCronJob(jobId) {
+      try {
+        await fetch(`${API}/cron/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' })
+        await this.loadCronJobs()
+      } catch (e) { console.error(e) }
+    },
+
+    async runQualityFix() {
+      this.fixing = true; this.wfAgents = []; this.wfPhase = ''; this.syncResult = null
+      const bodyObj = {}
+      if (this.selectedModel) bodyObj.model = this.selectedModel
+      if (this.keepCheckpoint) bodyObj.keep_checkpoint = true
+      const body = Object.keys(bodyObj).length > 0 ? JSON.stringify(bodyObj) : undefined
+      const url = `${API}/projects/${this.selectedProject}/quality-fix/stream`
+      try {
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+        const reader = r.body.getReader(); const decoder = new TextDecoder()
+        let buf = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const lines = buf.split('\n'); buf = lines.pop()
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const evt = JSON.parse(line.slice(6))
+                const sub = evt._subagent
+                let agent = sub ? this.wfAgents.findLast(x => x.label === sub) : null
+                if (evt.type === 'workflow_phase') {
+                  this.wfPhase = evt.phase
+                } else if (evt.type === 'workflow_agent_start') {
+                  this.wfAgents.push({ label: evt.label, phase: evt.phase, status: 'running', log: '', tools: [] })
+                } else if (evt.type === 'workflow_agent_end') {
+                  if (!agent) agent = this.wfAgents.findLast(x => x.label === evt.label && x.status === 'running')
+                  if (agent) { agent.status = evt.error ? 'error' : 'done'; agent.error = evt.error }
+                } else if (evt.type === 'message_update' && evt.text) {
+                  if (agent) { agent.log += evt.text }
+                } else if (evt.type === 'tool_execution_start') {
+                  if (agent) { agent.tools.push({ name: evt.tool, status: 'running', args: evt.args }) }
+                } else if (evt.type === 'tool_execution_end') {
+                  if (agent) { const t = agent.tools.findLast(x => x.name === evt.tool && x.status === 'running'); if (t) t.status = evt.is_error ? 'error' : 'done' }
+                } else if (evt.type === 'quality_fix_done') {
+                  this.syncResult = evt
+                  this.fixing = false
+                  if (evt.success) await this.checkQuality()
+                  return
+                }
+              } catch(_) {}
+            }
+          }
+        }
+      } catch (e) {
+        this.syncResult = { success: false, error: e.message }
+        this.fixing = false
+      }
     },
   }
 }).mount('#app')

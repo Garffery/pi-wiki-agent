@@ -1,0 +1,16 @@
+diff --git a/src/taskman/cli.py b/src/taskman/cli.py
+--- a/src/taskman/cli.py
++++ b/src/taskman/cli.py
+@@ -45,6 +45,15 @@ def delete_task(task_id: str) -> bool:
++@app.command()
++def export_tasks(output: str = "tasks.json"):
++    """Export all tasks to a JSON file."""
++    tasks = storage.list_all()
++    with open(output, "w") as f:
++        json.dump([t.to_dict() for t in tasks], f, indent=2)
+diff --git a/src/taskman/storage.py b/src/taskman/storage.py
+--- a/src/taskman/storage.py
++++ b/src/taskman/storage.py
+@@ -20,7 +20,7 @@ class JSONStorage:
+-        data[task.id] = {"status": task.status}
++        data[task.id] = task.to_dict()

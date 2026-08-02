@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AST 工作流编译器 — 架构详解</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #f78166;
+    --green: #3fb950;
+    --purple: #a371f7;
+    --yellow: #d2991d;
+    --code-bg: #1c2128;
+    --inline-code: #e6edf3;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1100px; margin: 0 auto; padding: 40px 24px;
+  }
+  h1 { font-size: 2.2em; margin-bottom: 8px; color: #fff; border-bottom: 2px solid var(--border); padding-bottom: 16px; }
+  h2 { font-size: 1.6em; margin: 48px 0 16px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 1.2em; margin: 32px 0 12px; color: var(--purple); }
+  h4 { font-size: 1.05em; margin: 20px 0 8px; color: var(--green); }
+  p { margin: 12px 0; }
+  .subtitle { color: var(--text-secondary); font-size: 1.1em; margin-bottom: 32px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; overflow-x: auto; margin: 16px 0; font-size: 0.88em; line-height: 1.5; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace; font-size: 0.92em; }
+  :not(pre) > code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; color: var(--inline-code); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  tr:nth-child(even) { background: var(--surface); }
+  ul, ol { margin: 12px 0 12px 24px; }
+  li { margin: 4px 0; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 16px 0; font-family: monospace; white-space: pre; line-height: 1.6; overflow-x: auto; font-size: 0.85em; }
+  .note { background: #1a2332; border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; }
+  .warn { background: #2a1f1a; border-left: 4px solid var(--accent2); padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; }
+  .hl { color: var(--accent); }
+  .hl2 { color: var(--accent2); }
+  .hl3 { color: var(--green); }
+  .hl4 { color: var(--purple); }
+  .hl5 { color: var(--yellow); }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc ul { list-style: none; margin: 8px 0 0; }
+  .toc li { margin: 4px 0; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>AST 工作流编译器 — 架构详解</h1>
+<p class="subtitle">YAML 工作流定义 → <code>ast.Module</code> → Python 脚本字符串 → <code>run_workflow()</code> 沙箱执行</p>
+
+<div class="toc">
+<strong>目录</strong>
+<ul>
+  <li><a href="#overview">1. 概述与设计目标</a></li>
+  <li><a href="#architecture">2. 整体架构与数据流</a></li>
+  <li><a href="#ir">3. IR 层 — 中间表示 (ir.py)</a></li>
+  <li><a href="#schema">4. Schema 编译器 (schema.py)</a></li>
+  <li><a href="#helpers">5. AST 节点工厂 (ast_helpers.py)</a></li>
+  <li><a href="#resolver">6. 变量解析器 (resolver.py)</a></li>
+  <li><a href="#builder">7. AST Builder (builder.py)</a></li>
+  <li><a href="#pipeline">8. 完整编译管线</a></li>
+  <li><a href="#vs-old">9. 新旧编译器对比</a></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. 概述与设计目标</h2>
+
+<p>新编译器将 YAML 工作流定义转化为可执行的 Python 脚本，核心变化是<strong>用 Python <code>ast</code> 模块构建 AST 语法树</strong>替代原有的字符串拼接方式。</p>
+
+<div class="two-col">
+<div>
+  <h4>旧方案（字符串拼接）</h4>
+  <pre><code>lines.append(
+    f"{var} = await agent("
+    f"  {prompt},"
+    f"  {{'label': {label}}})"
+)
+# → "_s1 = await agent(f'...', {'label': 'x'})"</code></pre>
+  <p class="note" style="margin-top:8px">引号/括号/缩进易出错，不可静态分析</p>
+</div>
+<div>
+  <h4>新方案（AST 构建）</h4>
+  <pre><code>H.assign(var_name,
+  H.await_expr(H.call_fn("agent", [
+    prompt_expr,
+    H.dict_literal({"label": label_expr})
+  ]))
+)</code></pre>
+  <p class="note" style="margin-top:8px"><code>ast</code> 模块保证语法正确，可做静态分析/优化</p>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="architecture">2. 整体架构与数据流</h2>
+
+<div class="diagram">                          ┌──────────────┐
+  YAML 文本 (.yaml) ───▶ │  ir.py       │ ───▶ WorkflowDef (纯数据 IR)
+                          │ parse_workflow│       ├─ name, description
+                          │  _yaml()     │       ├─ variables: [VariableDef]
+                          └──────────────┘       └─ phases: [PhaseDef]
+                                                        │
+                          ┌──────────────┐              │
+                          │  builder.py  │ ◀────────────┘
+                          │ WorkflowAST  │    + resolver.py (变量→ast.expr)
+                          │  Builder     │    + ast_helpers.py (AST 工厂)
+                          │  .build()    │
+                          └──────┬───────┘
+                                 │ ast.Module
+                          ┌──────▼───────┐
+                          │ ast.unparse()│
+                          └──────┬───────┘
+                                 │ Python 脚本字符串
+                          ┌──────▼───────┐
+                          │ run_workflow │  ← 沙箱 exec()
+                          │  (runtime)   │
+                          └──────────────┘</div>
+
+<p><strong>分层设计</strong>（每层独立、零耦合）：</p>
+<ol>
+  <li><strong>IR 层</strong> — 纯数据结构，与 AST 无关</li>
+  <li><strong>变量解析层</strong> — <code>${...}</code> 语法 → <code>ast.expr</code> 节点</li>
+  <li><strong>AST 构建层</strong> — IR + 变量节点 → 完整 <code>ast.Module</code></li>
+  <li><strong>序列化层</strong> — <code>ast.unparse()</code> → 字符串，喂给现有运行时</li>
+</ol>
+
+<div class="note">
+<strong>设计决策：输出仍是脚本字符串</strong><br>
+<code>run_workflow()</code> 中的 <code>parse_workflow_script()</code> 负责 meta 提取 + 安全审计（<code>_DeterminismVisitor</code>），这是安全边界，不应绕过。AST 方案通过 <code>ast.unparse()</code> 生成字符串再传给现有沙箱，保持安全边界完整。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="ir">3. IR 层 — 中间表示</h2>
+
+<h3>3.1 数据模型</h3>
+
+<table>
+<tr><th>Dataclass</th><th>字段</th><th>说明</th></tr>
+<tr>
+  <td><code>WorkflowDef</code></td>
+  <td><code>name, description, concurrency, variables, phases</code></td>
+  <td>顶层工作流定义</td>
+</tr>
+<tr>
+  <td><code>PhaseDef</code></td>
+  <td><code>title, mode, for_each, steps</code></td>
+  <td>阶段定义，mode ∈ {serial, parallel, dag, pipeline}</td>
+</tr>
+<tr>
+  <td><code>StepDef</code></td>
+  <td><code>agent, label, prompt, output_schema, id, depends_on</code></td>
+  <td>单个步骤，含原始 <code>${...}</code> 模板文本</td>
+</tr>
+<tr>
+  <td><code>VariableDef</code></td>
+  <td><code>name, prompt</code></td>
+  <td>YAML <code>variables:</code> 区段的变量定义</td>
+</tr>
+</table>
+
+<h3>3.2 YAML 解析入口</h3>
+
+<pre><code>def parse_workflow_yaml(yaml_text: str) -> WorkflowDef:
+    """YAML 文本 → IR 数据结构，含完整校验"""
+    doc = yaml.safe_load(yaml_text)
+    # 校验: dict 顶层、name 非空、phases 非空列表
+    # 逐项解析: _parse_concurrency, _parse_variables,
+    #           _parse_phase → _parse_step (含 schema 编译)</code></pre>
+
+<h3>3.3 IR 示例</h3>
+
+<p>输入 YAML：</p>
+<pre><code>name: sync
+phases:
+  - title: Analyze
+    steps:
+      - agent: diff-analyzer
+        prompt: "commit: ${commit_message}"</code></pre>
+
+<p>解析后 IR：</p>
+<pre><code>WorkflowDef(
+  name="sync",
+  phases=[
+    PhaseDef(
+      title="Analyze",
+      mode="serial",
+      for_each=None,
+      steps=[
+        StepDef(
+          agent="diff-analyzer",
+          label=None,
+          prompt="commit: ${commit_message}",
+          output_schema=None,
+          id=None,
+          depends_on=[]
+        )
+      ]
+    )
+  ]
+)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="schema">4. Schema 编译器</h2>
+
+<p>将 YAML 中的紧凑类型简写编译为标准 JSON Schema。</p>
+
+<h3>4.1 简写映射规则</h3>
+
+<table>
+<tr><th>YAML 简写</th><th>JSON Schema</th></tr>
+<tr><td><code>field: str</code></td><td><code>{"type": "string"}</code></td></tr>
+<tr><td><code>field: str?</code></td><td><code>{"type": "string"}</code>（键末尾 <code>?</code> → 不加入 required）</td></tr>
+<tr><td><code>field: int</code></td><td><code>{"type": "integer"}</code></td></tr>
+<tr><td><code>field: float</code></td><td><code>{"type": "number"}</code></td></tr>
+<tr><td><code>field: bool</code></td><td><code>{"type": "boolean"}</code></td></tr>
+<tr><td><code>field: [str]</code></td><td><code>{"type": "array", "items": {"type": "string"}}</code></td></tr>
+<tr><td><code>field: {enum: [a,b]}</code></td><td><code>{"type": "string", "enum": ["a", "b"]}</code></td></tr>
+<tr><td><code>field: {sub_a: str, sub_b?: int}</code></td><td><code>{"type": "object", "properties": {...}, "required": ["sub_a"]}</code></td></tr>
+</table>
+
+<h3>4.2 递归编译实现</h3>
+
+<pre><code>def compile_schema(shorthand: Any) -> dict | None:
+    if shorthand is None: return None
+    if isinstance(shorthand, str):       # str / str? / int / float / bool
+        return {"type": _TYPE_MAP[base]}
+    if isinstance(shorthand, list):      # [str] → array
+        return {"type": "array", "items": compile_schema(shorthand[0])}
+    if isinstance(shorthand, dict):
+        if "enum" in shorthand:          # {enum: [...]}
+            return {"type": "string", "enum": shorthand["enum"]}
+        # nested object → walk key-value pairs, checking ? suffix
+        return {"type": "object", "properties": ..., "required": ...}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="helpers">5. AST 节点工厂</h2>
+
+<p>薄封装层，每个函数返回独立的 <code>ast</code> 节点。按类别分组：</p>
+
+<h3>5.1 命名与常量</h3>
+<table>
+<tr><th>函数</th><th>生成 Python</th><th>AST 节点</th></tr>
+<tr><td><code>name("foo")</code></td><td><code>foo</code></td><td><code>Name(id='foo', ctx=Load())</code></td></tr>
+<tr><td><code>constant("hi")</code></td><td><code>'hi'</code></td><td><code>Constant(value='hi')</code></td></tr>
+<tr><td><code>none()</code></td><td><code>None</code></td><td><code>Constant(value=None)</code></td></tr>
+</table>
+
+<h3>5.2 表达式</h3>
+<table>
+<tr><th>函数</th><th>生成 Python</th></tr>
+<tr><td><code>call_fn("agent", [p, opts])</code></td><td><code>agent(p, opts)</code></td></tr>
+<tr><td><code>method(d, "get", [k])</code></td><td><code>d.get(k)</code></td></tr>
+<tr><td><code>get(d, "key")</code></td><td><code>d.get('key')</code></td></tr>
+<tr><td><code>get(d, "key", default)</code></td><td><code>d.get('key', default)</code></td></tr>
+<tr><td><code>await_expr(call)</code></td><td><code>await call</code></td></tr>
+<tr><td><code>subscript(d, k)</code></td><td><code>d[k]</code></td></tr>
+<tr><td><code>attribute(obj, "attr")</code></td><td><code>obj.attr</code></td></tr>
+<tr><td><code>or_expr(a, b)</code></td><td><code>a or b</code></td></tr>
+<tr><td><code>is_not_none(x)</code></td><td><code>x is not None</code></td></tr>
+<tr><td><code>ternary(cond, t, f)</code></td><td><code>t if cond else f</code></td></tr>
+<tr><td><code>isinstance_expr(x, "dict")</code></td><td><code>isinstance(x, dict)</code></td></tr>
+</table>
+
+<h3>5.3 语句</h3>
+<table>
+<tr><th>函数</th><th>生成 Python</th></tr>
+<tr><td><code>assign("x", expr)</code></td><td><code>x = expr</code></td></tr>
+<tr><td><code>if_stmt(test, body, orelse)</code></td><td><code>if test:\n    body\nelse:\n    orelse</code></td></tr>
+<tr><td><code>for_loop("i", iter, body)</code></td><td><code>for i in iter:\n    body</code></td></tr>
+<tr><td><code>return_stmt(expr)</code></td><td><code>return expr</code></td></tr>
+</table>
+
+<h3>5.4 数据结构</h3>
+<table>
+<tr><th>函数</th><th>生成 Python</th></tr>
+<tr><td><code>dict_literal({"k": v})</code></td><td><code>{'k': v}</code></td></tr>
+<tr><td><code>list_literal([a, b])</code></td><td><code>[a, b]</code></td></tr>
+</table>
+
+<h3>5.5 函数与推导式</h3>
+<table>
+<tr><th>函数</th><th>生成 Python</th></tr>
+<tr><td><code>lambda_expr(["x"], body, {"x": def})</code></td><td><code>lambda x=def: body</code></td></tr>
+<tr><td><code>list_comp(elt, target, iter)</code></td><td><code>[elt for target in iter]</code></td></tr>
+<tr><td><code>dict_comp(k, v, target, iter, ifs)</code></td><td><code>{k: v for target in iter if ifs}</code></td></tr>
+<tr><td><code>fstring(parts)</code></td><td><code>f'...{expr}...'</code></td></tr>
+<tr><td><code>formatted_value(expr)</code></td><td><code>{expr}</code> (f-string 内部)</td></tr>
+</table>
+
+<h3>5.6 ctx 上下文管理</h3>
+
+<p>Python AST 要求可赋值节点（Name、Subscript、Attribute、List、Tuple）携带 <code>ctx</code> 标识：</p>
+<ul>
+  <li><code>ast.Load()</code> — 读取上下文（表达式）</li>
+  <li><code>ast.Store()</code> — 写入上下文（赋值目标、循环变量）</li>
+</ul>
+<p><code>name()</code> 默认返回 <code>Load</code>；<code>assign()</code> 和 <code>for_loop()</code> 自动将目标设为 <code>Store</code>；<code>_set_store_ctx()</code> 递归处理 Tuple 等复合目标。</p>
+
+<div class="warn">
+<strong>常见 bug</strong>：忘记设置 <code>ctx</code> 导致 <code>TypeError: required field "ctx" missing from Name</code>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="resolver">6. 变量解析器</h2>
+
+<h3>6.1 核心概念</h3>
+
+<p><code>ResolveContext</code> 记录当前作用域中的变量名映射：</p>
+<pre><code>@dataclass
+class ResolveContext:
+    prev_var: str = "_prev"       # ${previous} → 引用此变量
+    item_var: str = "_item"       # ${item.xxx} → 引用此变量
+    outputs_var: str = "_outputs" # ${outputs.xxx} → 引用此字典</code></pre>
+
+<h3>6.2 模板语法 → AST 节点映射表</h3>
+
+<table>
+<tr><th>YAML 模板</th><th>生成的 AST 表达式</th><th>辅助函数</th></tr>
+<tr><td><code>${name}</code></td><td><code>args['name']</code></td><td><code>subscript(name('args'), constant('name'))</code></td></tr>
+<tr><td><code>${name.sub}</code></td><td><code>args.get('name', {}).get('sub')</code></td><td><code>get(get(name('args'), 'name', {}), 'sub')</code></td></tr>
+<tr><td><code>${item}</code></td><td><code>_item</code></td><td><code>name('_item')</code></td></tr>
+<tr><td><code>${item.field}</code></td><td><code>_item.get('field')</code></td><td><code>get(name('_item'), 'field')</code></td></tr>
+<tr><td><code>${previous}</code></td><td><code>_prev</code>（或链式变量名）</td><td><code>name(ctx.prev_var)</code></td></tr>
+<tr><td><code>${self.varname}</code></td><td><code>_self_varname</code></td><td><code>name('_self_varname')</code></td></tr>
+<tr><td><code>${outputs.P.X}</code></td><td><code>(_outputs.get('P') or {}).get('X')<br>if isinstance(...) and isinstance(...)<br>else []</code></td><td>带 <code>isinstance</code> 守卫的三元表达式</td></tr>
+<tr><td><code>${join(arr, tpl)}</code></td><td><code>chr(10).join(f'...{f}...' for f in arr)</code></td><td>GeneratorExp + JoinedStr</td></tr>
+<tr><td><code>text</code></td><td><code>'text'</code></td><td><code>constant('text')</code></td></tr>
+<tr><td><code>text ${x} more</code></td><td><code>f'text {expr} more'</code></td><td><code>JoinedStr([constant, formatted_value, constant])</code></td></tr>
+</table>
+
+<h3>6.3 公开 API</h3>
+
+<pre><code>def resolve_expr(raw: str, ctx: ResolveContext) -> ast.expr:
+    """解析 labels/ids/for_each 表达式。
+       - 纯 ${...} → 裸表达式节点
+       - 纯文本 → Constant(str)
+       - 混合 → JoinedStr (f-string)
+    """
+
+def resolve_prompt(raw: str, ctx: ResolveContext) -> ast.expr:
+    """解析 prompt 文本 → 始终返回字符串表达式 (Constant 或 JoinedStr)"""</code></pre>
+
+<h3>6.4 关键技术细节</h3>
+
+<h4>6.4.1 文本分割器 (<code>_split_vars</code>)</h4>
+<p>将含 <code>${...}</code> 的文本分割为交替的 <code>(is_var, value)</code> 元组列表。支持嵌套花括号：<code>${foo${bar}}</code> 正确识别为单个变量 <code>foo${bar}</code>，通过花括号深度计数实现。</p>
+
+<h4>6.4.2 outputs 守卫</h4>
+<p><code>${outputs.Plan.tasks}</code> 生成带运行时类型检查的三元表达式：</p>
+<pre><code>(_outputs.get('Plan') or {}).get('file_tasks')
+  if isinstance(_outputs.get('Plan'), dict)
+     and isinstance((_outputs.get('Plan') or {}).get('file_tasks'), list)
+  else []</code></pre>
+<p>使用 <code>isinstance_expr()</code> 构建 <code>isinstance(x, dict)</code> 节点，用 <code>BoolOp(And)</code> 组合两个检查，用 <code>IfExp</code> 构建三元表达式。</p>
+
+<h4>6.4.3 join 函数 — 源码逐行解析</h4>
+
+<p>以 sync.yaml Analyze 阶段的真实输入为例：</p>
+<pre><code>${join(changed_files, "- ${item}")}</code></pre>
+
+<p>目标输出：</p>
+<pre><code>chr(10).join(f'- {f}' for f in args['changed_files'])</code></pre>
+
+<hr style="border-color:var(--border);margin:20px 0">
+
+<p><strong>第 1 步：提取 join 的内部参数</strong>（第 181 行）</p>
+<pre><code>inner = expr[5:].rstrip(")").lstrip("(")
+# expr   = "join(changed_files, \"- ${item}\")"
+# inner  = "changed_files, \"- ${item}\""</code></pre>
+
+<p><strong>第 2 步：在顶层逗号处拆分数组和模板</strong>（第 182-187 行）</p>
+<pre><code>comma_idx = _find_top_level_comma(inner)
+# → 14（changed_files 和 "- ${item}" 之间的逗号位置）
+
+array_raw = inner[:comma_idx].strip()
+# → "changed_files"
+
+array_expr = _resolve_bare(array_raw, ctx)
+# → Subscript(Name('args'), Constant('changed_files'))
+#    即: args['changed_files']</code></pre>
+
+<div class="note">
+<strong><code>_find_top_level_comma</code></strong>（第 318-328 行）用括号深度计数找到不被嵌套括号包裹的逗号。例如 <code>f(a, b), "x"</code> 返回 <code>f(a, b)</code> 后面的逗号，而非 <code>(a, b)</code> 内部的逗号。
+</div>
+
+<p><strong>第 3 步：提取并清洗模板字符串</strong>（第 189-193 行）</p>
+<pre><code>template = inner[comma_idx + 1:].strip()
+# → '"- ${item}"'   （带外层引号）
+
+# 去掉外层引号
+template = template[1:-1]
+# → "- ${item}"</code></pre>
+
+<p><strong>第 4 步：将模板拆成 f-string 片段</strong>（第 196 行，调用 <code>_build_join_fstring</code>）</p>
+
+<pre><code>def _build_join_fstring(template: str) -> list[ast.expr]:
+    # template = "- ${item}"
+    #
+    # Step A: 用正则找到所有匹配
+    matches = []
+    # _JOIN_ITEM_FIELD_RE = r"\$\{item\.(\w+)\}"  匹配 ${item.xxx}
+    # _JOIN_ITEM_RE       = r"\$\{item\}"         匹配 ${item}
+    #
+    # template = "- ${item}"  → matches = [(2, 9, None)]
+    #                           (start=2, end=9, field=None 表示 ${item})
+    #
+    # 如果是 "- [${item.severity}] ${item.page}"  →
+    #   matches = [(4, 20, "severity"), (21, 32, "page")]
+</code></pre>
+
+<p>匹配结果按起始位置排序，并排除重叠（<code>${item}</code> 是 <code>${item.xxx}</code> 的子串，如果已被 field 匹配覆盖则跳过）。</p>
+
+<pre><code>    # Step B: 逐段交替构建 AST 片段
+    pos = 0
+    for start, end, field in matches:
+        # [0, pos) 间的文本 → Constant 字面量
+        if pos &lt; start:
+            parts.append(H.constant(template[pos:start]))
+            # template[0:2] → Constant("- ")
+
+        # [start, end) 间的变量 → FormattedValue
+        if field is not None:
+            # ${item.severity} → FormattedValue(Subscript(Name('f'), 'severity'))
+            f_expr = H.subscript(H.name("f"), H.constant(field))
+        else:
+            # ${item} → FormattedValue(Name('f'))
+            f_expr = H.name("f")
+        parts.append(ast.FormattedValue(value=f_expr, conversion=-1))
+        pos = end
+
+    # 尾部剩余文本 → Constant
+    if pos &lt; len(template):
+        parts.append(H.constant(template[pos:]))
+
+    # 结果: [Constant("- "), FormattedValue(Name('f'))]
+    return parts</code></pre>
+
+<div class="note">
+<strong>为什么用 <code>FormattedValue(Name('f'))</code> 而非直接引用 <code>_item</code>？</strong><br>
+因为外层的 Generator 用 <code>for f in array</code> 遍历，每个元素在生成器作用域内叫 <code>f</code>。<code>${item}</code> 的语义是"当前迭代项"，在生成器内就是 <code>f</code>。
+</div>
+
+<p><strong>第 5 步：组装 GeneratorExp + join 调用</strong>（第 198-207 行）</p>
+<pre><code># 5a: chr(10) — 换行符
+chr_call = H.call_fn("chr", [H.constant(10)])
+# → Call(func=Name('chr'), args=[Constant(10)])
+#    即: chr(10)
+
+# 5b: 生成器表达式 (f'- {f}' for f in args['changed_files'])
+gen = ast.GeneratorExp(
+    elt=ast.JoinedStr(values=fstring_parts),
+    #   → JoinedStr([Constant("- "), FormattedValue(Name('f'))])
+    #     即: f'- {f}'
+    generators=[ast.comprehension(
+        target=H.name("f"),          # 循环变量 f
+        iter=array_expr,             # 迭代源 args['changed_files']
+        ifs=[],                      # 无过滤条件
+        is_async=False,              # 同步生成器
+    )],
+)
+# 整体: (f'- {f}' for f in args['changed_files'])
+
+# 5c: .join() 方法调用
+return H.call(H.attribute(chr_call, "join"), [gen])
+# → Call(func=Attribute(Call(chr, [10]), 'join'), args=[GeneratorExp])
+#    即: chr(10).join((f'- {f}' for f in args['changed_files']))</code></pre>
+
+<p><strong>最终 AST 树全景</strong>（以 <code>${join(changed_files, "- ${item}")}</code> 为例）：</p>
+
+<div class="diagram">Call(func=                                      ← chr(10).join(...)
+  Attribute(                                     ← chr(10).join
+    value=Call(func=Name('chr'),                 ← chr(10)
+               args=[Constant(10)]),
+    attr='join'
+  ),
+  args=[
+    GeneratorExp(                                ← (f'- {f}' for f in ...)
+      elt=JoinedStr([                            ← f'- {f}'
+        Constant("- "),                           ← '- '
+        FormattedValue(Name('f'))                 ← {f}
+      ]),
+      generators=[comprehension(
+        target=Name('f'),                        ← for f
+        iter=Subscript(Name('args'),              ← in args['changed_files']
+                        Constant('changed_files'))
+      )]
+    )
+  ]
+)</div>
+
+<!-- ============================================================ -->
+<h2 id="builder">7. AST Builder</h2>
+
+<h3>7.1 类结构</h3>
+
+<pre><code>class WorkflowASTBuilder:
+    def __init__(self, wf: WorkflowDef):
+        self.wf = wf
+        self._counter = 0          # _s1, _s2, ... 唯一变量名
+        self._chain_prev: str      # 跨 serial 阶段的 ${previous} 链
+
+    def build(self) -> ast.Module:   # 主入口
+    def _next_var(self) -> str:      # 生成 _sN 变量名
+    def _phase_var(self, i) -> str:  # 生成 _pN 阶段变量名</code></pre>
+
+<h3>7.2 <code>build()</code> 生成的脚本结构</h3>
+
+<div class="diagram"># ─── 模块头部 ───
+meta = {'name': 'sync', 'description': '...', 'phases': [...]}
+_outputs = {}
+_prev = None
+checkpoint.save('_meta', {'workflow': 'sync'})
+_self_&lt;name&gt; = &lt;prompt&gt;          # 可选：YAML variables 区段
+
+# ─── 每个 Phase ───
+phase('Analyze')
+# ... 阶段体（因模式而异）...
+_outputs['Analyze'] = &lt;result&gt;
+log('[DEBUG phase=Analyze] ...')
+
+phase('Plan')
+# ...
+_outputs['Plan'] = &lt;result&gt;
+
+phase('Write')
+# ... (dag 模式)
+_outputs['Write'] = &lt;result&gt;
+
+# ─── 清理与返回 ───
+if not args.get('keep_checkpoint'):
+    checkpoint.clear()
+return dict(_outputs)</div>
+
+<h3>7.3 Serial 模式 — 以 sync.yaml 的 Analyze 阶段为例</h3>
+
+<p>YAML 定义：</p>
+<pre><code>phases:
+  - title: Analyze
+    steps:
+      - agent: diff-analyzer
+        label: diff analysis
+        prompt: |
+          ## 提交信息
+          ${commit_message}
+
+          ## 变更文件
+          ${join(changed_files, "- ${item}")}
+
+          ## 受影响的 Wiki 章节
+          ${affected_sections}
+          ...</code></pre>
+
+<p>该阶段只有一个 step，<strong>无 for_each</strong>，走 <code>_build_serial</code> 的 else 分支。</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h4>7.3.1 源码逐段解析</h4>
+
+<p><strong>Step 1 — 创建变量名</strong>（第 174-177 行）：</p>
+<pre><code>stmts: list[ast.stmt] = []
+prev_var_name = f"{pv}_prev"           # → "_p0_prev"
+results_var = H.name(f"{pv}_results")  # → Name('_p0_results')</code></pre>
+
+<p><strong>Step 2 — checkpoint 加载</strong>（第 232-238 行）：</p>
+<pre><code>stmts.append(H.assign(                  # _p0_prev =
+    prev_var_name,                       #
+    H.or_expr(                           #   checkpoint.load('Analyze') or {}
+        H.method(H.name("checkpoint"), "load", [H.constant(check_key)]),
+        H.dict_literal(),                #
+    ),                                   #
+))</code></pre>
+<p>生成代码：<code>_p0_prev = checkpoint.load('Analyze') or {}</code></p>
+<p>AST 树结构：</p>
+<div class="diagram">Assign
+├── targets: [Name('_p0_prev', Store())]
+└── value: BoolOp(op=Or(), values=[
+        Call(                           ← checkpoint.load('Analyze')
+            func=Attribute(Name('checkpoint'), 'load'),
+            args=[Constant('Analyze')]
+        ),
+        Dict(keys=[], values=[])        ← {}
+    ])</div>
+
+<p><strong>Step 3 — 构建步骤执行体</strong>（第 240-252 行）：</p>
+<pre><code># 确定 ${previous} 的变量：首个 serial 阶段用 "_prev"，后续阶段链到前一个 _sN
+prev_var = self._chain_prev or "_prev"
+
+# 构建 step 的 agent 调用
+step_stmts, result_var = self._build_serial_steps(
+    phase.steps,                           # [StepDef(agent="diff-analyzer", ...)]
+    ResolveContext(prev_var=prev_var),     # ctx.prev_var = "_prev"
+)
+
+# 追加：_s_result = _s1   （记录最后一步的返回值）
+step_stmts.append(H.assign("_s_result", result_var))
+
+# 追加：checkpoint.save('Analyze', {'value': _s_result, 'session_path': ...})
+step_stmts.append(H.expr_stmt(H.method(H.name("checkpoint"), "save", [
+    H.constant(check_key),
+    H.dict_literal({
+        "value": H.name("_s_result"),
+        "session_path": H.call_fn("agent_session_path", []),
+    }),
+])))</code></pre>
+
+<p><strong>Step 3a — <code>_build_serial_steps</code> 内部</strong>（第 281-299 行）：</p>
+<pre><code>for step in steps:                              # 本例只有 1 个 step
+    var_name = self._next_var()                  # → "_s1"
+    var = H.name(var_name)                       # → Name('_s1')
+
+    # 解析 prompt 中的 ${...} 变量
+    prompt_expr = resolve_prompt(step.prompt, ctx)
+    #  → JoinedStr([
+    #       Constant('## 提交信息\n'),
+    #       FormattedValue(Subscript(Name('args'), 'commit_message')),
+    #       Constant('\n\n## 变更文件\n'),
+    #       FormattedValue(Call(Attribute(Call(chr, [10]), 'join'), [GeneratorExp(...)])),
+    #       Constant('\n\n## 受影响的 Wiki 章节\n'),
+    #       FormattedValue(Subscript(Name('args'), 'affected_sections')),
+    #       ...
+    #     ])
+
+    # 解析 label 中的 ${...} 变量（本例无变量，直接返回常量）
+    label_expr = resolve_expr(step.label or step.agent, ctx)
+    #  → Constant('diff analysis')
+
+    # 构造 opts 字典
+    opts = self._build_opts(step, label_expr)
+    #  → Dict(keys=[Constant('label'), Constant('agent')],
+    #          values=[Constant('diff analysis'), Constant('diff-analyzer')])
+
+    # 组合成 agent() 调用
+    agent_call = H.call_fn("agent", [prompt_expr, opts])
+    #  → Call(func=Name('agent'), args=[JoinedStr(...), Dict(...)])
+
+    # 生成: _s1 = await agent(...)
+    stmts.append(H.assign(var_name, H.await_expr(agent_call)))
+
+    # 生成: _r = _s1  （供 for_each 场景使用）
+    stmts.append(H.assign("_r", var))
+
+    ctx.prev_var = var_name   # 更新链，下一步 ${previous} → _s1
+    last_var = var
+
+return stmts, last_var        # → (语句列表, Name('_s1'))</code></pre>
+
+<!-- ─────────────────────────────────────────── -->
+<h4>7.3.2 最终生成的 Python 代码</h4>
+
+<p>Analyze 阶段（单步 serial，无 for_each）完整输出：</p>
+<pre><code>phase('Analyze')
+_p0_prev = checkpoint.load('Analyze') or {}
+if _p0_prev.get('value') is not None:
+    log('[checkpoint] Phase Analyze CHECKPOINT HIT')
+    _s_result = _p0_prev['value']
+else:
+    _s1 = await agent(
+        f'## 提交信息\n{args['commit_message']}\n\n## 变更文件\n{chr(10).join((f'- {f}' for f in args['changed_files']))}\n\n## 受影响的 Wiki 章节\n{args['affected_sections']}\n...',
+        {'label': 'diff analysis', 'agent': 'diff-analyzer'}
+    )
+    _r = _s1
+    _s_result = _s1
+    checkpoint.save('Analyze', {'value': _s_result, 'session_path': agent_session_path()})
+_p0_results = _s_result</code></pre>
+
+<!-- ─────────────────────────────────────────── -->
+<h4>7.3.3 checkpoint 断点续跑机制</h4>
+
+<p>流程分为两个分支：</p>
+<table>
+<tr><th>条件</th><th>行为</th><th>场景</th></tr>
+<tr>
+  <td><code>_p0_prev.get('value') is not None</code></td>
+  <td>直接从 <code>_p0_prev['value']</code> 读取缓存结果，跳过 agent 调用</td>
+  <td>上次运行成功、重启后恢复</td>
+</tr>
+<tr>
+  <td>否则</td>
+  <td>执行 agent，完成后 <code>checkpoint.save(...)</code> 持久化结果</td>
+  <td>首次运行或上次未完成</td>
+</tr>
+</table>
+
+<div class="note">
+<strong>Checkpoint 存储结构：</strong><br>
+<code>.wiki/checkpoints/&lt;commit_hash&gt;/Analyze.json</code><br>
+<code>→ {"value": &lt;agent 返回值&gt;, "session_path": &lt;JSONL session 文件路径&gt;}</code><br><br>
+<code>session_path</code> 使下次运行可以通过 <code>resume_from</code> 从已有 session 继续对话，而非重新开始。
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h4>7.3.4 ${previous} 跨阶段/跨步骤链</h4>
+
+<p>第一阶段 Analyze 的 <code>${previous}</code> 引用 <code>_prev</code>（初始为 <code>None</code>）。</p>
+<p>第二阶段 Plan 的 <code>${previous}</code> 引用 Analyze 最后一步的结果。链条如下：</p>
+
+<div class="diagram">Phase 0 (Analyze):
+  _build_serial_steps(ctx.prev_var="_prev")
+    _s1 = await agent("...${commit_message}...")    ← ${previous}=_prev=None
+    ctx.prev_var = "_s1"
+    → 返回 (stmts, Name('_s1'))
+
+  _s_result = _s1
+  _build_phase: self._chain_prev = "_s_result"
+
+Phase 1 (Plan):
+  prev_var = self._chain_prev or "_prev"   → "_s_result"
+  _build_serial_steps(ctx.prev_var="_s_result")
+    _s2 = await agent("...${previous}...")           ← ${previous}=_s_result
+    → 引用上一步 Analyze 的输出</div>
+
+<p>在 <code>_build_serial_steps</code> 中，每一步完成后更新 <code>ctx.prev_var</code>，后续步骤的 <code>${previous}</code> 自动指向刚完成那一步的结果。</p>
+
+<h3>7.4 Parallel 模式</h3>
+
+<h4>7.4.1 无 for_each</h4>
+<pre><code>_p1_results = await parallel([
+    (lambda: agent(f'...', {'label': '...', 'agent': 'a1'})),
+    (lambda: agent(f'...', {'label': '...', 'agent': 'a2'})),
+])</code></pre>
+
+<h4>7.4.2 含 for_each — 闭包捕获</h4>
+<pre><code>_p1_items = &lt;for_each 表达式&gt;
+if _p1_items:
+    _p1_results = await parallel([
+        (lambda it=_item: agent(...))
+        for _item in _p1_items
+    ])</code></pre>
+<p>关键点：<code>lambda it=_item</code> 利用默认参数在定义时捕获当前循环值，避免闭包延迟求值问题。</p>
+
+<h3>7.5 DAG 模式 — 最复杂</h3>
+
+<h4>7.5.1 逻辑架构</h4>
+<div class="diagram">  加载 checkpoint → 获取 for_each 列表
+       │
+       ▼
+  for idx, it in enumerate(items):
+      tid = it.get('id', f'task-{idx}')
+      pe = prev_tasks.get(tid) or {}
+      │
+      ├─ pe.value 非空 → 缓存分支（lambda 直接返回缓存值）
+      ├─ pe 有 session_path → 恢复分支（agent 带 resume_from）
+      └─ 否则 → 全新分支（正常 agent 调用）
+       │
+       ▼
+  seed = {tid: v['value'] for tid, v in prev_tasks.items()
+          if v.get('value') is not None}
+       │
+       ▼
+  results_dict = await dag(dag_tasks, seed=seed)
+       │
+       ▼
+  results = [results_dict.get(it.get('id', ...)) for idx, it in enumerate(items)]
+       │
+       ▼
+  for idx, it in enumerate(items):  # 保存 checkpoint
+      _wr[tid] = {'value': r, 'session_path': cs if r is not None else old_s}
+  checkpoint.save(...)</div>
+
+<h4>7.5.2 三分支详解</h4>
+
+<table>
+<tr><th>分支</th><th>条件</th><th>生成的 lambda</th><th>用途</th></tr>
+<tr>
+  <td><span class="hl3">cached</span></td>
+  <td><code>pe.get('value') is not None</code></td>
+  <td><code>lambda v=pe['value']: v</code></td>
+  <td>直接返回缓存值，跳过执行</td>
+</tr>
+<tr>
+  <td><span class="hl5">resume</span></td>
+  <td><code>pe.get('session_path')</code></td>
+  <td><code>lambda it2=it, sp=pe['session_path']: agent(..., resume_from=sp)</code></td>
+  <td>从已有 session 恢复继续</td>
+</tr>
+<tr>
+  <td><span class="hl2">fresh</span></td>
+  <td>其他</td>
+  <td><code>lambda it2=it: agent(...)</code></td>
+  <td>全新执行</td>
+</tr>
+</table>
+
+<h4>7.5.3 无 for_each 的 DAG</h4>
+<pre><code>_p2_dag_tasks = [
+    {'id': 'task-1', 'fn': lambda: agent(...), 'depends_on': []},
+    {'id': 'task-2', 'fn': lambda: agent(...), 'depends_on': ['task-1']},
+]
+_p2_results_dict = await dag(_p2_dag_tasks)</code></pre>
+
+<h4>7.5.4 seed dict comprehension</h4>
+<pre><code># 生成的 AST：
+{ tid: v['value']
+  for tid, v in _p2_prev_tasks.items()
+  if v.get('value') is not None }</code></pre>
+<p>通过 <code>dict_comp()</code> 构建，Tuple 解包 <code>(tid, v)</code> 作为目标，<code>is_not_none(get(v, 'value'))</code> 作为过滤条件。</p>
+
+<h3>7.6 Pipeline 模式</h3>
+
+<pre><code>_p3_items = &lt;for_each 表达式&gt;
+if _p3_items:
+    _p3_results = await pipeline(
+        _p3_items,
+        lambda _prev, _orig, _idx: agent(...),  # stage 1
+        lambda _prev, _orig, _idx: agent(...),  # stage 2
+    )</code></pre>
+<p>每阶段 lambda 接收 <code>_prev</code>（上一阶段输出）、<code>_orig</code>（原始 item）、<code>_idx</code>（索引），Stage 之间通过 <code>_prev</code> 链式传递。</p>
+
+<h3>7.7 Agent 调用构造</h3>
+
+<pre><code>def _build_opts(self, step, label_expr, extra=None) -> ast.expr:
+    """构造 agent() 的 opts 字典"""
+    pairs = {
+        "label": label_expr,
+        "agent": constant(step.agent),
+    }
+    if step.output_schema:
+        pairs["schema"] = constant(json.dumps(step.output_schema))
+    if extra:
+        pairs.update(extra)   # 例如 {"resume_from": sp_var}
+    return H.dict_literal(pairs)</code></pre>
+
+<p>最终生成的 agent 调用 AST：</p>
+<pre><code>await agent(
+    f'...prompt with {interpolations}...',
+    {'label': '...', 'agent': 'agent-name', 'schema': '{"type":"object",...}'}
+)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="pipeline">8. 完整编译管线</h2>
+
+<h3>8.1 入口函数</h3>
+
+<pre><code>def compile_workflow_yaml(yaml_text: str, agent_defs=None) -> str:
+    """YAML → IR → AST → 脚本字符串"""
+    wf = parse_workflow_yaml(yaml_text)          # ir.py
+    builder = WorkflowASTBuilder(wf)              # builder.py
+    mod = builder.build()                         # ast.Module
+    return ast.unparse(mod)                       # → str</code></pre>
+
+<h3>8.2 从 YAML 到执行：端到端流程</h3>
+
+<div class="diagram">  sync.yaml
+     │
+     ▼
+  parse_workflow_yaml(yaml_text)
+     │  ├─ yaml.safe_load()
+     │  ├─ 结构校验（name, phases, mode, agent...）
+     │  └─ compile_schema() — 编译 output_schema 简写
+     ▼
+  WorkflowDef (IR dataclass)
+     │
+     ▼
+  WorkflowASTBuilder(wf).build()
+     │  ├─ _build_meta()     → meta = {...}
+     │  ├─ _build_init()     → _outputs = {}, _prev = None
+     │  ├─ _build_variables() → _self_xxx = ...
+     │  ├─ _build_phase() × N
+     │  │   ├─ resolve_expr()  — for_each / labels
+     │  │   ├─ resolve_prompt() — agent prompts
+     │  │   ├─ _build_serial / _parallel / _dag / _pipeline
+     │  │   └─ all via H.* AST helpers
+     │  ├─ _build_cleanup()  → if not args.get(...): checkpoint.clear()
+     │  └─ _build_return()   → return dict(_outputs)
+     ▼
+  ast.Module
+     │
+     ▼
+  ast.unparse(mod)  →  Python 脚本字符串
+     │
+     ▼
+  run_workflow(script, options)
+     │  ├─ parse_workflow_script() — 提取 meta, AST 安全审计
+     │  ├─ exec(wrapper, sandbox_globals) — 沙箱执行
+     │  │   ├─ agent()    → WorkflowAgent.run()
+     │  │   ├─ parallel() → asyncio.gather()
+     │  │   ├─ dag()      → Kahn 拓扑排序 + 3 色 DFS 环检测
+     │  │   ├─ pipeline() → 逐项阶段链式传递
+     │  │   └─ checkpoint → JSON 文件持久化
+     │  └─ 返回 WorkflowRunResult</div>
+
+<!-- ============================================================ -->
+<h2 id="vs-old">9. 新旧编译器对比</h2>
+
+<table>
+<tr><th>维度</th><th>旧方案（字符串拼接）</th><th>新方案（AST 构建）</th></tr>
+<tr>
+  <td>代码生成方式</td>
+  <td><code>lines.append(f"var = await agent(...)")</code></td>
+  <td><code>H.assign(var, H.await_expr(H.call_fn("agent", [...])))</code></td>
+</tr>
+<tr>
+  <td>语法正确性</td>
+  <td>依赖程序员手动保证引号/括号/缩进</td>
+  <td><code>ast</code> 模块保证节点结构正确</td>
+</tr>
+<tr>
+  <td>变量解析</td>
+  <td>返回拼接的 Python 代码<strong>字符串</strong>片段</td>
+  <td>返回 <code>ast.expr</code> 节点，类型安全</td>
+</tr>
+<tr>
+  <td>可维护性</td>
+  <td>模板代码难以阅读和调试</td>
+  <td>AST 节点结构清晰，组合式构建</td>
+</tr>
+<tr>
+  <td>可扩展性</td>
+  <td>新增语法需手写字符串模板</td>
+  <td>组合现有 AST 节点即可</td>
+</tr>
+<tr>
+  <td>静态分析</td>
+  <td>不可能</td>
+  <td>可在 AST 上做静态分析/优化</td>
+</tr>
+<tr>
+  <td>调试体验</td>
+  <td>只能看生成的文本</td>
+  <td>可用 <code>ast.dump()</code> 检查树结构</td>
+</tr>
+<tr>
+  <td>安全边界</td>
+  <td><code>run_workflow()</code> 做 AST 安全审计</td>
+  <td>同左 — 不改动安全边界</td>
+</tr>
+<tr>
+  <td>输出格式</td>
+  <td>脚本字符串</td>
+  <td>脚本字符串（<code>ast.unparse()</code>）— 接口完全兼容</td>
+</tr>
+</table>
+
+<h3>9.1 模块拆分对比</h3>
+
+<div class="two-col">
+<div>
+  <h4>旧方案</h4>
+  <pre><code>compiler.py  (~610 行，单文件)
+  ├─ compile_schema()
+  ├─ _resolve_var_bare()
+  ├─ resolve_var()
+  ├─ resolve_expr()
+  ├─ resolve_prompt()
+  ├─ compile_phases()
+  ├─ _compile_serial_steps()
+  ├─ _emit_agent()
+  ├─ _emit_opts()
+  └─ compile_workflow_yaml()</code></pre>
+</div>
+<div>
+  <h4>新方案</h4>
+  <pre><code>ast_compiler/  (6 文件，~1300 行)
+  ├─ ir.py         — 数据模型 + 解析
+  ├─ schema.py     — schema 编译器
+  ├─ ast_helpers.py — AST 工厂函数
+  ├─ resolver.py   — 变量解析
+  ├─ builder.py    — AST Builder
+  └─ __init__.py   — 对外接口</code></pre>
+</div>
+</div>
+
+<h3>9.2 关键修复</h3>
+
+<ul>
+  <li><strong>${self.xxx}</strong>：旧代码解析为 <code>_self.get('xxx', '')</code> 但 <code>_self</code> 字典不存在（运行时 NameError）；新代码正确解析为 <code>_self_xxx</code> 变量引用</li>
+  <li><strong>ctx 上下文</strong>：所有 AST 节点正确设置 <code>Load()</code>/<code>Store()</code> 上下文标识</li>
+</ul>
+
+</body>
+</html>

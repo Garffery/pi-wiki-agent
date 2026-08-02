@@ -1,0 +1,7 @@
+{
+  "changed_files": [
+    "src/taskman/cli.py"
+  ],
+  "commit_message": "chore: remove deprecated sync_legacy command",
+  "revision": "case-03"
+}
