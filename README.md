@@ -1,284 +1,255 @@
-# pi-wiki-agent
+<p align="center">
+  <h1 align="center">pi-wiki-agent</h1>
+  <p align="center"><strong>VCS-driven wiki documentation agent — keep your wiki in sync with your code, automatically.</strong></p>
+</p>
 
-> Python port of the [pi-mono](../pi-mono) TypeScript monorepo — four packages with aligned code, logic, algorithms, and folder structure.
->
-> **[中文 README →](README_CN.md)**
-
-| TypeScript | Python | Description |
-|---|---|---|
-| `@mariozechner/pi-ai` | `pi_ai` | Unified LLM streaming layer (Google, Anthropic, OpenAI, Bedrock, …) |
-| `@mariozechner/pi-agent-core` | `pi_agent` | Agent loop, tool execution, state management |
-| `@mariozechner/pi-coding-agent` | `pi_coding_agent` | Coding agent CLI with file tools: read, write, edit, bash, grep, find, ls |
-| `@mariozechner/pi-tui` | `pi_tui` | Terminal UI library with differential rendering engine |
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#desktop-app">Desktop App</a> •
+  <a href="#evaluation">Evaluation</a> •
+  <a href="#development">Development</a>
+</p>
 
 ---
 
-## Installation
+## Features
 
-### Prerequisites
-
-- **Python 3.11+** — Check with `python3 --version`
-- **[uv](https://docs.astral.sh/uv/)** — Fast Python package manager
-
-Install `uv` if you don't have it:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Clone and Install
-
-```bash
-git clone https://github.com/openxjarvis/pi-wiki-agent.git
-cd pi-wiki-agent
-
-# Install all four packages and their dependencies in one step
-uv sync
-```
+- **VCS-driven sync** — every commit triggers a 3-stage LLM workflow (Analyze → Plan → Write) that updates wiki pages to reflect code changes. No manual documentation effort.
+- **DAG-parallel execution** — Wiki pages are updated in topological order with maximum parallelism. LLM declares task dependencies; the engine resolves and executes them concurrently.
+- **Quality auto-fix** — Built-in quality checker finds broken links, stale content, empty sections, and structural defects. One-click or cron-triggered fix workflow repairs them automatically.
+- **Reverse-index traceability** — Every wiki section carries a `**source**` link back to the file that generated it. Changes propagate bidirectionally: code → wiki and wiki → code.
+- **YAML → AST workflow compiler** — Workflows are defined in YAML and compiled to Python AST nodes (not string templates). Type-safe, statically analyzable, and extensible.
+- **Checkpoint & resume** — Every phase persists to disk. Failed runs resume from the last successful checkpoint, not from scratch.
+- **Desktop app + SSE streaming** — Vue 3 frontend with real-time agent progress, tool call visualization, model management, and cron scheduling.
+- **Pluggable models** — Built-in catalog of 739 models across 22 providers. Add custom providers via the UI or `~/.pi/agent/models.json`.
+- **Evaluation framework** — Structured test harness with diff-based test cases, pass@k metrics, LLM-as-Judge scoring, and Markdown reporting.
 
 ---
 
 ## Quick Start
 
-### 1. Configure API Keys
-
-Create `.env` in the project root:
-
-```bash
-# Google Gemini (recommended default)
-GEMINI_API_KEY=your_key_here
-
-# Optional — add whichever providers you need
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
-GOOGLE_API_KEY=        # alternative to GEMINI_API_KEY
-AWS_ACCESS_KEY_ID=     # for AWS Bedrock
-AWS_SECRET_ACCESS_KEY=
-```
-
-> **Important:** `.env` is loaded automatically at runtime. **Never commit it to git.**
-
-### 2. Launch the Interactive TUI
-
-```bash
-uv run --package pi-coding-agent pi
-```
-
-This opens the full-featured terminal UI where you can chat with the coding agent.
-
-**Keyboard shortcuts:**
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Shift+Enter` | New line in input |
-| `/` | Slash command completion |
-| `@` | File path completion |
-| `Ctrl+P` | Cycle to next model |
-| `Ctrl+C` / `Esc` | Quit |
-
-### 3. Try a Simple Task
-
-Type in the terminal:
-
-```
-Create a Python function to calculate fibonacci numbers
-```
-
-The agent will write the code and save it to your current directory.
-
----
-
-## Common Use Cases
-
-### Single Prompt (Non-Interactive)
-
-For scripting or quick tasks:
-
-```bash
-uv run --package pi-coding-agent pi --print "Write a quicksort in Python"
-```
-
-The agent's response prints to stdout and exits.
-
-### Switch Models
-
-```bash
-# Use a specific model
-uv run --package pi-coding-agent pi --model gemini-2.5-pro-preview
-
-# Use a provider + model name
-uv run --package pi-coding-agent pi --provider google --model gemini-2.0-flash
-
-# List all available models
-uv run --package pi-coding-agent pi --list-models
-```
-
-### Resume Previous Sessions
-
-```bash
-# Continue the most recent session
-uv run --package pi-coding-agent pi --continue
-
-# Pick from a list of previous sessions
-uv run --package pi-coding-agent pi --resume
-```
-
-### Slash Commands in TUI
-
-Type `/` in the interactive TUI to see available commands:
-
-| Command | Description |
-|---------|-------------|
-| `/model <name>` | Switch to a different model |
-| `/thinking <level>` | Set thinking detail: `minimal` · `low` · `medium` · `high` · `xhigh` |
-| `/compact` | Compress conversation context to save tokens |
-| `/session` | Show session statistics (tokens used, cost estimate) |
-| `/tools` | List all active tools available to the agent |
-
-### Full CLI Help
-
-```bash
-uv run --package pi-coding-agent pi --help
-```
-
----
-
-## Running Tests
-
-### All tests
-
-```bash
-uv run pytest
-```
-
-### Per-package
-
-```bash
-uv run pytest packages/tui/tests/          # TUI components
-uv run pytest packages/ai/tests/           # AI providers
-uv run pytest packages/agent/tests/        # Agent core
-uv run pytest packages/coding-agent/tests/ # CLI + coding agent
-```
-
-### Live API tests (requires `GEMINI_API_KEY`)
-
-```bash
-uv run pytest packages/ai/tests/ --live -v
-
-# Or via environment variable
-LIVE_TESTS=1 uv run pytest packages/ai/tests/ -v
-```
-
-> All tests run against mocks by default — no API key required, no quota consumed.
-
----
-
-## Test Status
-
-| Package | Tests | Status |
-|---------|-------|--------|
-| `pi_tui` | 135 | ✅ passed |
-| `pi_ai` + `pi_agent` | 156 | ✅ passed (7 skipped = live-only) |
-| `pi_coding_agent` | 287 | ✅ passed |
-| **Total** | **578** | **✅ all passing** |
-
----
-
----
-
-## Extension System
-
-pi supports a dynamic extension system. Extensions can register custom tools, slash commands, and event handlers.
-
-### Built-in Extension: Todo Manager
-
-The todo extension (`extensions/todos.py`) provides file-based task management:
-
-- **Storage**: Each todo is a `.md` file under `.pi/todos/` (or `$PI_TODO_PATH`) with JSON frontmatter + markdown body
-- **Fields**: `id`, `title`, `tags`, `status` (open/closed/done), `created_at`, `assigned_to_session`
-- **Settings**: `.pi/todos/settings.json` — `gc` (auto-cleanup) and `gcDays` (age threshold)
-
-#### Todo Tool Actions
-
-| Action | Description |
-|--------|-------------|
-| `list` | Show open + assigned todos |
-| `list-all` | Show all todos including closed |
-| `get` | View a single todo by ID |
-| `create` | Create a new todo (auto-generates ID) |
-| `update` | Modify title/status/tags/body |
-| `delete` | Remove a todo |
-| `claim` | Assign a todo to the current session |
-| `release` | Unassign a todo |
-
-#### Usage
-
-```bash
-# List todos (via the coding agent)
-uv run --package pi-coding-agent pi --print "Show me my open todos"
-
-# Manual file operations
-ls .pi/todos/
-cat .pi/todos/<id>.md
-```
-
-### Writing Your Own Extension
-
-Extensions live in the `extensions/` directory. To create one:
-
-```python
-# extensions/my_extension.py
-def extension_factory(pi):
-    # Register a tool
-    pi.register_tool(
-        name="my_tool",
-        description="My custom tool",
-        parameters={...},
-        execute=my_async_function,
-    )
-
-    # Register a slash command
-    pi.register_command(
-        name="mycommand",
-        description="Description for /mycommand",
-        handler=my_handler_function,
-    )
-
-    # Listen to events
-    pi.on("session_start", on_session_start)
-```
-
----
-
-## Windows Support
-
-pi is fully compatible with Windows. See [WINDOWS_FIXES.md](WINDOWS_FIXES.md) for details on:
-
-- Native Windows console input (using `msvcrt` and Win32 API)
-- UTF-8 encoding support
-- Environment variables for troubleshooting (`PI_FORCE_READLINE`, `PYTHONIOENCODING`)
-
-Quick tips for Windows:
-
-```powershell
-# If TUI has issues, fall back to readline mode
-$env:PI_FORCE_READLINE = "1"
-uv run --package pi-coding-agent pi
-
-# Fix encoding issues with Chinese characters
-$env:PYTHONIOENCODING = "utf-8"
-```
-
----
-
-## Development Guide
-
 ### Prerequisites
 
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** — Fast Python package manager
-- **git**
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- An LLM API key (DeepSeek, Anthropic, Gemini, or OpenAI)
+
+### Installation
+
+```bash
+git clone https://github.com/openxjarvis/pi-wiki-agent.git
+cd pi-wiki-agent
+
+# Install all dependencies
+uv sync
+```
+
+### Configuration
+
+```bash
+# .env — at least one API key required
+ANTHROPIC_API_KEY=sk-ant-xxx    # or GEMINI_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY...
+
+# Optional: add custom models via the desktop UI or by editing:
+# ~/.pi/agent/models.json
+# ~/.pi/agent/auth.json
+```
+
+### Launch
+
+```bash
+# Start the desktop server
+uv run pi-wiki-desktop
+# → http://127.0.0.1:8899
+
+# Or run the sync workflow programmatically
+python -c "
+import asyncio
+from pi_wiki_agent.core.workflow_sync import execute_workflow_sync
+
+result = asyncio.run(execute_workflow_sync(
+    project_path='D:/project/wiki-demo-taskman',
+    changed_files=['src/taskman/cli.py'],
+    commit_message='feat: add export command',
+    diff=open('diff.txt').read(),
+    revision='my-commit-hash',
+    script=open('sync.yaml').read(),
+    model='deepseek:deepseek-v4-flash',
+))
+print(result.result)
+"
+```
+
+---
+
+## How It Works
+
+### Sync Workflow
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Analyze  │ ──▶ │  Plan    │ ──▶ │  Write   │
+│          │     │          │     │  (DAG)   │
+│ diff →   │     │ file_tasks│    │ agent A  │
+│ impact   │     │ + no_change│   │ agent B  │
+│ analysis │     │ + schema  │    │ agent C  │
+└──────────┘     └──────────┘     └──────────┘
+```
+
+1. **Analyze** — `diff-analyzer` agent reads each changed file's diff and explains the impact on wiki documentation.
+2. **Plan** — `wiki-planner` agent consumes the analysis and outputs a structured JSON (`file_tasks` + `no_change_files`) via a `structured_output` tool. For each task, it specifies the target wiki page, section, action (create/update/delete), and precise instructions.
+3. **Write** — `wiki-writer` agents execute tasks in parallel according to a DAG. The planner declares task dependencies; the engine topologically sorts and executes with maximum concurrency. Each agent reads the target wiki page, applies only the instructed changes, and preserves WIKI_SECTION markers and `**source**` traceability links.
+
+### Fix Workflow
+
+```
+Quality Check → {issues} → Analyze → Plan → Fix (DAG)
+```
+
+`WikiQualityChecker` scans all `.wiki/*.md` pages for 9 types of defects across two priority tiers. The report feeds into a fix workflow that runs the same 3-stage pattern with quality-specific agents (`quality-analyzer`, `fix-planner`, `page-fixer`).
+
+### Workflow Definition (YAML)
+
+Workflows are defined in YAML and compiled to Python via AST:
+
+```yaml
+name: sync
+phases:
+  - title: Analyze
+    steps:
+      - agent: diff-analyzer
+        prompt: |
+          ## 提交信息
+          ${commit_message}
+          ## 变更文件
+          ${join(changed_files, "- ${item}")}
+
+  - title: Plan
+    steps:
+      - agent: wiki-planner
+        output_schema:
+          file_tasks:
+            - file: str
+              wiki_page: str
+              action: {enum: [create, update, delete]}
+              instructions: str
+
+  - title: Write
+    mode: dag
+    for_each: ${outputs.Plan.file_tasks}
+    steps:
+      - agent: wiki-writer
+```
+
+See [workflow documentation](packages/wiki-agent/src/pi_wiki_agent/core/workflow/ast_compiler/DETAIL.html) for the full AST compiler architecture.
+
+---
+
+## Architecture
+
+```
+pi-wiki-agent/
+├── desktop/                         # FastAPI backend + Vue 3 frontend
+│   ├── src/pi_wiki_desktop/
+│   │   ├── app.py                   # Server entry point (uvicorn)
+│   │   ├── api/v1/endpoints/        # REST + SSE endpoints
+│   │   └── wiki_model_registry.py   # Persistent model CRUD
+│   └── pyproject.toml
+├── frontend/                        # Vue 3 SPA
+│   ├── index.html
+│   ├── app.js
+│   └── style.css
+├── packages/
+│   ├── wiki-agent/                  # Core engine
+│   │   └── src/pi_wiki_agent/
+│   │       ├── core/
+│   │       │   ├── workflow/        # DAG engine + AST compiler
+│   │       │   ├── workflow_sync.py # Sync orchestrator
+│   │       │   ├── wiki_quality.py  # Quality checker
+│   │       │   └── agent_session.py # Agent session management
+│   │       ├── cases/               # Test case library
+│   │       ├── eval/                # Evaluation framework
+│   │       └── cron/                # Scheduled jobs
+│   ├── ai/                          # LLM provider layer (739 models)
+│   ├── agent/                       # Agent loop + tool execution
+│   ├── coding-agent/                # File tools (read/write/edit/bash)
+│   └── tui/                         # Terminal UI library
+├── docs/                            # Design docs + evaluation plans
+│   └── test/                        # Test framework documentation
+├── .env                             # API keys (gitignored)
+└── pyproject.toml                   # uv workspace root
+```
+
+---
+
+## Desktop App
+
+Launch the server at `http://127.0.0.1:8899`:
+
+```bash
+uv run pi-wiki-desktop
+```
+
+**Project Management**
+- Add/remove projects with file browser
+- Each project stores `.wiki/` (pages, reverse-index, checkpoint state)
+
+**Commit Sync**
+- Three modes: **Single Agent** (sequential), **Chain** (pipeline), **Workflow** (DAG-parallel)
+- Select pending commits, preview file changes, trigger sync
+- **Real-time SSE streaming** of agent progress per phase
+
+**Quality Dashboard**
+- Run quality checks across all wiki pages
+- **Auto-fix workflow** with live progress per check type
+- Issues categorized by severity (error / warning / info)
+
+**Settings**
+- **Model Management** — add custom providers + models via UI
+- **Filter Rules** — path/author/message patterns to skip commits
+- **Cron Jobs** — schedule quality checks and auto-fix on a timer
+
+---
+
+## Evaluation
+
+The project includes a structured test framework for evaluating the sync agent:
+
+```bash
+# Dry-run (no LLM, validates pipeline logic)
+python -m pi_wiki_agent.eval \
+    --cases packages/wiki-agent/src/pi_wiki_agent/cases \
+    --dry-run \
+    --report docs/test/reports/report.md
+
+# Real LLM run
+python -m pi_wiki_agent.eval \
+    --cases packages/wiki-agent/src/pi_wiki_agent/cases \
+    --report docs/test/reports/report.md
+```
+
+**Test cases** are YAML-free — each case is a directory of `diff.txt` + `args.json` + `expected.json`:
+
+```
+cases/
+├── case_01_new_feature/       ← Agent adds new wiki content
+├── case_02_modify_behavior/   ← Agent updates existing descriptions
+├── case_03_remove_refactor/   ← Agent removes stale content
+├── case_04_doc_only/          ← Agent correctly does nothing
+├── case_05_multi_file/        ← Agent handles multi-file changes
+├── case_06_new_feature_2/     ← Cross-validation
+├── case_07_modify_behavior_2/ ← Cross-validation
+└── case_08_large_diff/        ← Stress test (50-line diff)
+```
+
+**Metrics** follow the SWE-bench methodology: `pass@k` (probability of at least 1 success in k attempts), `pass^k` (all k succeed), quality deltas, latency, and token cost. See [Evaluation Plan](docs/test/EVALUATION_PLAN.md) for full details.
+
+---
+
+## Development
 
 ### Setup
 
@@ -288,139 +259,45 @@ cd pi-wiki-agent
 uv sync
 ```
 
-### Code Style
-
-This project uses [Ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+### Run Tests
 
 ```bash
-# Lint
-uv run ruff check .
-
-# Format
-uv run ruff format .
+uv run pytest                              # All tests (578 passing)
+uv run pytest packages/wiki-agent/tests/   # Wiki-agent specific
+uv run pytest --live -v                    # Live API tests (needs API key)
 ```
 
-Configuration is in `pyproject.toml`:
-- Line length: 120
-- Target: Python 3.11
-- Rules: E, F, I, UP
-
-### Adding Dependencies
+### Code Quality
 
 ```bash
-uv add <package>                    # Add to a specific package
-uv add --dev <package>              # Add dev dependency
-uv sync                             # Update lockfile
+uv run ruff check .   # Lint
+uv run ruff format .  # Format
 ```
 
-### Creating a New Package
+### Underlying Packages
 
-```bash
-mkdir -p packages/my-package/src/my_package
-mkdir packages/my-package/tests
-```
-
-Add to `[tool.uv.workspace]` members in `pyproject.toml`:
-
-```toml
-[tool.uv.workspace]
-members = ["packages/ai", "packages/agent", "packages/coding-agent", "packages/tui", "packages/my-package"]
-```
-
-### Testing
-
-```bash
-uv run pytest                    # All tests
-uv run pytest -x                 # Stop on first failure
-uv run pytest -k "test_name"     # Run specific test
-uv run pytest --cov              # With coverage
-uv run pytest --live -v          # Live API tests (requires GEMINI_API_KEY)
-```
-
-### Type Checking (future)
-
-Type hints are used throughout. We recommend `pyright` or `mypy` for static analysis:
-
-```bash
-uv run pyright packages/
-```
-
----
-
-## Project Structure
-
-```
-pi-wiki-agent/
-├── .env                          ← API keys (never commit)
-├── pyproject.toml                ← uv workspace root
-├── conftest.py                   ← global pytest config (.env loader)
-└── packages/
-    ├── ai/                       ← LLM provider layer
-    │   └── src/pi_ai/
-    │       ├── providers/        ← google.py, openai.py, anthropic.py, …
-    │       ├── stream.py         ← unified stream_simple() / complete_simple()
-    │       └── utils/            ← overflow detection, JSON parse, …
-    ├── agent/                    ← core agent loop
-    │   └── src/pi_agent/
-    │       ├── agent.py          ← main run loop
-    │       ├── tools/            ← tool registry & execution
-    │       └── session.py        ← session state
-    ├── coding-agent/             ← CLI entry point & extensions
-    │   └── src/pi_coding_agent/
-    │       ├── cli.py            ← `pi` command
-    │       ├── core/             ← AgentSession, system prompt, tools
-    │       └── modes/interactive/← TUI interactive mode
-    └── tui/                      ← terminal UI library
-        └── src/pi_tui/
-            ├── components/       ← Editor, SelectList, Markdown, …
-            ├── tui.py            ← differential rendering engine
-            └── keys.py           ← Kitty keyboard protocol parser
-```
-
----
-
-## TypeScript → Python Mapping
-
-| TypeScript | Python |
-|---|---|
-| `interface X {}` | `class X(BaseModel):` or `@dataclass` |
-| `type X = A \| B` | `X = Union[A, B]` |
-| `async function f()` | `async def f()` |
-| `AsyncIterable<T>` | `AsyncGenerator[T, None]` |
-| `AbortSignal` | `asyncio.Event` (cancellation token) |
-| `EventEmitter` | `dict[str, list[Callable]]` |
-| TypeBox schema | `pydantic.BaseModel` |
-| `vitest` | `pytest` + `pytest-asyncio` |
+| Package | Description | Tests |
+|---------|-------------|-------|
+| `pi_ai` | Unified LLM streaming (Google, Anthropic, OpenAI, …) | 156 |
+| `pi_agent` | Agent loop, tool execution, state management | — |
+| `pi_coding_agent` | Coding agent with file tools | 287 |
+| `pi_tui` | Terminal UI library | 135 |
+| `pi_wiki_agent` | Wiki sync engine, workflow, quality checker | — |
+| **Total** | | **578** |
 
 ---
 
 ## FAQ
 
-| Problem | Solution |
-|---------|----------|
-| `uv: command not found` | Run the install script: `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| `GEMINI_API_KEY not set` | Add your key to `.env` |
-| `ModuleNotFoundError: pi_tui` | Use `uv run --package pi-coding-agent pi` instead of `python` directly |
-| TUI shows garbled characters | Ensure your terminal supports UTF-8 (iTerm2, Warp, or any modern terminal) |
-| Tests are skipped | Add `--live` to run real API tests |
-| `400 thought_signature` error | Upgrade to the latest version — this is fixed in the google provider |
-
----
-
-## FAQ (Windows)
-
-| Problem | Solution |
-|---------|----------|
-| TUI not responding to keyboard | Set `$env:PI_FORCE_READLINE = "1"` to use readline mode |
-| Chinese characters garbled | Set `$env:PYTHONIOENCODING = "utf-8"` |
-| `ModuleNotFoundError` with `uv run` | Run from project root with `uv sync` first |
-
----
-
-## Related Projects
-
-- **pi-mono TypeScript** — [github.com/badlogic/pi-mono](https://github.com/badlogic/pi-mono) — Upstream TypeScript monorepo
-- **openclaw-python** — [github.com/openxjarvis/openclaw-python](https://github.com/openxjarvis/openclaw-python) — Complete AI gateway built on these packages (Telegram, Lark, Web UI, scheduling, multi-agent)
+| Question | Answer |
+|----------|--------|
+| What does it sync? | Any wiki page in `.wiki/*.md` with `WIKI_SECTION` markers and a reverse index |
+| What VCS are supported? | Git (SVN in progress) |
+| Can I add custom LLM models? | Yes — via the desktop UI or `~/.pi/agent/models.json` |
+| Does it work without an API key? | Most tests run with mocks. Real sync requires at least one API key |
+| How are diffs provided? | Workflows accept raw diff strings; the CLI reads from git. See [test cases](packages/wiki-agent/src/pi_wiki_agent/cases/) for synthetic examples |
+| Can I define custom workflows? | Yes — write a YAML file with phases/steps/modes, place it in `.wiki/workflows/` |
+| Checkpoint resume? | Every phase checkpoints to `.wiki/checkpoints/<hash>/`. Failed runs resume from the last successful phase |
 
 ---
 
