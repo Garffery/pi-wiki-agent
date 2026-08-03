@@ -50,6 +50,7 @@ class TestRunner:
         cases_dir: Path,
         repeats: int = 1,
         on_progress: Callable[[int, int, str], None] | None = None,
+        case_filter: str | None = None,
     ) -> SuiteResult:
         """
         遍历 cases_dir 下所有用例，逐个执行。
@@ -58,10 +59,19 @@ class TestRunner:
             cases_dir: 测试用例根目录
             repeats: 每个用例重复次数
             on_progress: 进度回调 (current, total, case_id)
+            case_filter: 可选用例名称过滤（匹配目录名，如 "case_01" 或 "new_feature"）
         """
         case_dirs = discover_cases(cases_dir)
+
+        # 应用过滤器
+        if case_filter:
+            case_dirs = [d for d in case_dirs if case_filter in d.name]
+
         if not case_dirs:
-            raise FileNotFoundError(f"未找到测试用例: {cases_dir}")
+            msg = f"未找到测试用例: {cases_dir}"
+            if case_filter:
+                msg += f" (filter: {case_filter})"
+            raise FileNotFoundError(msg)
 
         suite = SuiteResult(
             suite_name=cases_dir.name,

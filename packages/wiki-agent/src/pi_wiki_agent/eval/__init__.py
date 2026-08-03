@@ -13,6 +13,7 @@ from .types import SuiteResult, CaseResult, Assertion, Verdict, RunStatus
 from .loader import discover_cases, load_case
 from .runner import TestRunner
 from .checker import check
+from .metrics import pass_at_k, compute_pass_at_k, compute_pass_power_k, compute_all
 from .reporter import (
     print_header, print_case_result, print_summary,
     write_markdown_report,
@@ -23,6 +24,7 @@ __all__ = [
     "discover_cases", "load_case",
     "TestRunner",
     "check",
+    "pass_at_k", "compute_pass_at_k", "compute_pass_power_k", "compute_all",
     "print_header", "print_case_result", "print_summary",
     "write_markdown_report",
 ]

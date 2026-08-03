@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .types import SuiteResult, CaseResult, Assertion, Verdict, RunStatus
+from .metrics import compute_all
 
 # ═══════════════════════════════════════════════════════════
 # ANSI 颜色
@@ -125,7 +126,26 @@ def print_summary(suite: SuiteResult, file: TextIO = sys.stdout):
     print(f"  断言通过率: {suite.assertion_pass_rate*100:.1f}%", file=file)
     print(f"  用例通过率: {suite.overall_pass_rate*100:.1f}%", file=file)
     print(f"  总耗时:     {suite.total_duration_ms:.0f}ms", file=file)
+
+    # pass@k 指标
+    m = compute_all(suite)
+    if "pass@1" in m:
+        print(f"  pass@1:     {m['pass@1']*100:.1f}%", file=file)
+    if "pass@3" in m:
+        print(f"  pass@3:     {m['pass@3']*100:.1f}%", file=file)
+    if "pass^k" in m:
+        print(f"  pass^{suite.repeats}:    {m['pass^k']*100:.1f}%", file=file)
+    if "mean_duration_ms" in m:
+        print(f"  平均耗时:   {m['mean_duration_ms']:.0f}ms", file=file)
     print(file=file)
+
+    # 按类型细分 pass@1
+    by_type = m.get("by_type") or {}
+    if by_type:
+        print("  ── 按类型 pass@1 ──", file=file)
+        for ctype, tm in by_type.items():
+            print(f"  {ctype:20s}  {tm['pass@1']*100:5.1f}%  ({tm['pass_rate']*100:.0f}% cases 有过成功)", file=file)
+        print(file=file)
 
     # 失败列表
     failures = suite.failures()
@@ -158,12 +178,20 @@ def write_markdown_report(suite: SuiteResult, output_path: Path) -> Path:
 
     # 汇总
     counts = suite.by_status
+    m = compute_all(suite)
     lines.append("## 汇总")
     lines.append("")
     lines.append(f"| 指标 | 值 |")
     lines.append(f"|------|----|")
     lines.append(f"| 用例通过率 | {suite.overall_pass_rate*100:.1f}% |")
     lines.append(f"| 断言通过率 | {suite.assertion_pass_rate*100:.1f}% |")
+    lines.append(f"| pass@1 | {m.get('pass@1', 0)*100:.1f}% |")
+    if "pass@3" in m:
+        lines.append(f"| pass@3 | {m['pass@3']*100:.1f}% |")
+    if "pass^k" in m:
+        lines.append(f"| pass^{suite.repeats} | {m['pass^k']*100:.1f}% |")
+    if "mean_duration_ms" in m:
+        lines.append(f"| 平均耗时 | {m['mean_duration_ms']:.0f}ms |")
     lines.append(f"| 完全通过 | {counts[RunStatus.SUCCESS.value]} |")
     lines.append(f"| 部分失败 | {counts[RunStatus.PARTIAL.value]} |")
     lines.append(f"| 执行错误 | {counts[RunStatus.ERROR.value]} |")

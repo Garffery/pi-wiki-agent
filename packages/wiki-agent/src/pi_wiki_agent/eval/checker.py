@@ -50,8 +50,10 @@ def check(expected: dict[str, Any], actual: dict[str, Any]) -> list[Assertion]:
          f"errors: {errors_before} → {errors_after}")
 
     # ── 3. 页面覆盖 ──
-    plan_tasks = (actual.get("outputs") or {}).get("Plan", {}).get("file_tasks") or []
-    actual_pages = set(t.get("wiki_page", "") for t in plan_tasks)
+    outputs = actual.get("outputs") or {}
+    plan_raw: Any = outputs.get("Plan", {}) if isinstance(outputs, dict) else {}
+    plan_tasks: list = (plan_raw.get("file_tasks") or []) if isinstance(plan_raw, dict) else []
+    actual_pages = set(t.get("wiki_page", "") for t in plan_tasks if isinstance(t, dict))
 
     expected_pages = set(expected.get("should_modify_pages") or [])
     for page in expected_pages:
@@ -69,7 +71,7 @@ def check(expected: dict[str, Any], actual: dict[str, Any]) -> list[Assertion]:
              f"Plan 应产出空任务列表，实际 {len(plan_tasks)} 条: {plan_tasks}")
 
     if "plan_no_change_files_should_include" in expected:
-        no_change = (actual.get("outputs") or {}).get("Plan", {}).get("no_change_files") or []
+        no_change = plan_raw.get("no_change_files") or [] if isinstance(plan_raw, dict) else []
         for fname in expected["plan_no_change_files_should_include"]:
             _contains(f"no_change_includes:{fname}", no_change, fname)
 
