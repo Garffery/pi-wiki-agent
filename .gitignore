@@ -46,4 +46,6 @@ tests/
 example/
 
 # Electron app (from other branch)
-electron-app/
+electron-app/node_modules/
+electron-app/dist/
+electron-app/build/
