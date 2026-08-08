@@ -1,0 +1,8 @@
+{
+  "vcs": "git",
+  "changed_files": [
+    "src/taskman/cli.py"
+  ],
+  "commit_message": "feat: add export command with format option",
+  "revision": "f764ab2ac42548970169a3c58ce38dd580a1c9f8"
+}

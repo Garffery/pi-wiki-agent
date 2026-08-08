@@ -1,0 +1,17 @@
+{
+  "name": "pi-wiki-agent",
+  "version": "0.53.0",
+  "description": "Wiki management desktop app",
+  "author": "pi-wiki-agent",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build:backend": "uv run python scripts/build-backend.py",
+    "build": "npm run build:backend && electron-builder",
+    "build:win": "npm run build:backend && electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.0.0"
+  }
+}

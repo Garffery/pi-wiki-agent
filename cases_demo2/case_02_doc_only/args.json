@@ -1,0 +1,16 @@
+{
+  "vcs": "git",
+  "changed_files": [
+    ".wiki/Home.md",
+    ".wiki/_templates/page-template.md",
+    ".wiki/api-reference.md",
+    ".wiki/architecture.md",
+    ".wiki/changelog.md",
+    ".wiki/configuration.md",
+    ".wiki/faq.md",
+    ".wiki/getting-started.md",
+    ".wiki/installation.md"
+  ],
+  "commit_message": "fix: rename WIKI_SESSION to WIKI_SECTION",
+  "revision": "20597c2c910d4485500ec7330296970f751cc069"
+}

@@ -44,3 +44,11 @@ tests/
 
 # Examples (don't push to remote)
 example/
+
+# Electron
+electron-app/node_modules/
+electron-app/dist/
+electron-app/build/
+
+# PyInstaller
+*.spec

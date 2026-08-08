@@ -1,0 +1,13 @@
+diff --git a/src/taskman/cli.py b/src/taskman/cli.py
+index 8ec6714..d3ca378 100644
+--- a/src/taskman/cli.py
++++ b/src/taskman/cli.py
+@@ -41,3 +41,8 @@ def remove(task_id: str) -> None:
+ def stats() -> None:
+     """Show task statistics."""
+     typer.echo("Task statistics")
++
++@app.command()
++def export(fmt: str = "json") -> None:
++    """Export all tasks in the specified format."""
++    typer.echo(f"Exporting tasks as {fmt}")

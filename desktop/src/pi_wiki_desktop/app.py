@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -67,7 +68,11 @@ def create_app() -> FastAPI:
     app.include_router(router)
 
     # Mount frontend static files
-    frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
+    # When frozen (PyInstaller), frontend is bundled as data and extracted to sys._MEIPASS
+    if getattr(sys, 'frozen', False):
+        frontend_dir = Path(sys._MEIPASS) / 'frontend'
+    else:
+        frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend"
     if frontend_dir.exists():
         app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 

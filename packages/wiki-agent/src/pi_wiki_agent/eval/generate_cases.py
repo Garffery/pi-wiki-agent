@@ -90,6 +90,55 @@ def _svn_diff(project: str, revision: str) -> str:
     return result.stdout
 
 
+# ── 单 commit 元信息获取 ────────────────────────────────────────────────────────
+
+def _git_commit_info(project: str, revision: str) -> dict | None:
+    """git: 获取单个 commit 的元信息。"""
+    # commit message
+    result = subprocess.run(
+        ["git", "-C", project, "log", "-1", "--format=%H|%s", revision],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if not result.stdout.strip():
+        return None
+    parts = result.stdout.strip().split("|", 1)
+    rev = parts[0]
+    msg = parts[1] if len(parts) > 1 else ""
+    # 变更文件列表
+    files_result = subprocess.run(
+        ["git", "-C", project, "diff-tree", "--no-commit-id",
+         "--name-only", "-r", rev],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    files = [f for f in files_result.stdout.strip().split("\n") if f]
+    return {"revision": rev, "message": msg, "files": files}
+
+
+def _svn_commit_info(project: str, revision: str) -> dict | None:
+    """SVN: 获取单个 revision 的元信息。"""
+    result = subprocess.run(
+        ["svn", "log", "-r", revision, "--xml", project],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(result.stdout)
+    entry = root.find("logentry")
+    if entry is None:
+        return None
+    rev = entry.get("revision")
+    msg_elem = entry.find("msg")
+    msg = msg_elem.text.strip() if msg_elem is not None and msg_elem.text else ""
+    paths_elem = entry.find("paths")
+    files = []
+    if paths_elem is not None:
+        for p in paths_elem.findall("path"):
+            path = p.text or ""
+            if path.startswith("/"):
+                path = path[1:]
+            files.append(path)
+    return {"revision": rev, "message": msg, "files": files}
+
+
 # ── 类型推断 ───────────────────────────────────────────────────────────────────
 
 def _infer_type(files: list[str], message: str) -> str:
@@ -112,24 +161,49 @@ def _infer_type(files: list[str], message: str) -> str:
 
 # ── 生成入口 ───────────────────────────────────────────────────────────────────
 
-def generate_cases(project: str, out_dir: Path, count: int = 10, vcs: str = "git"):
+def generate_cases(
+    project: str,
+    out_dir: Path,
+    count: int = 10,
+    vcs: str = "git",
+    revisions: list[str] | None = None,
+):
     """
     从版本历史批量生成测试 case。
 
     Args:
         project: 目标项目路径
         out_dir: 输出目录
-        count: 提取的 commit 数量
+        count: 提取的 commit 数量（revisions 为空时有效）
         vcs: "git" 或 "svn"
+        revisions: 指定 revision 列表。非空时忽略 count，只用指定版本。
+                   git: commit hash 或短 hash
+                   svn: revision 数字（字符串形式）
     """
     log_fn = _git_log if vcs == "git" else _svn_log
     diff_fn = _git_diff if vcs == "git" else _svn_diff
+    info_fn = _git_commit_info if vcs == "git" else _svn_commit_info
 
-    commits = log_fn(project, count)
-    if not commits:
-        print(f"没有找到任何 commit: {project}")
-        return
+    if revisions:
+        # 指定版本模式
+        commits = []
+        for rev in revisions:
+            info = info_fn(project, rev.strip())
+            if info:
+                commits.append(info)
+            else:
+                print(f"  警告: 未找到 revision '{rev}'，已跳过")
+        if not commits:
+            print(f"没有找到任何有效的 revision: {revisions}")
+            return
+    else:
+        # 最近 N 个模式
+        commits = log_fn(project, count)
+        if not commits:
+            print(f"没有找到任何 commit: {project}")
+            return
 
+    total = len(commits)
     os.makedirs(out_dir, exist_ok=True)
 
     for i, commit in enumerate(commits):
@@ -161,7 +235,7 @@ def generate_cases(project: str, out_dir: Path, count: int = 10, vcs: str = "git
             "should_not_modify_pages": [],
         }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        print(f"  [{i+1:02d}/{count}] {case_dir.name}  ({rev[:12]})  {msg[:60]}")
+        print(f"  [{i+1:02d}/{total}] {case_dir.name}  ({rev[:12]})  {msg[:60]}")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -175,18 +249,29 @@ def main():
     parser.add_argument("--project", required=True,
                         help="目标项目路径")
     parser.add_argument("--count", type=int, default=10,
-                        help="提取的 commit 数量")
+                        help="提取最近 N 个 commit（与 --revisions 互斥，默认 10）")
+    parser.add_argument("--revisions", type=str, default=None,
+                        help="指定 revision 列表，逗号分隔。如 'f764ab2,9126b6c' 或 '101,102,105'")
     parser.add_argument("--out", type=Path, default=Path("cases"),
                         help="输出目录")
     args = parser.parse_args()
 
     project_path = os.path.abspath(args.project)
     out_dir = args.out.resolve()
-    print(f"VCS: {args.vcs}, 项目: {project_path}, 数量: {args.count}, 输出: {out_dir}")
+
+    revisions = None
+    if args.revisions:
+        revisions = [r.strip() for r in args.revisions.split(",") if r.strip()]
+
+    if revisions:
+        print(f"VCS: {args.vcs}, 项目: {project_path}, 指定版本: {len(revisions)} 个, 输出: {out_dir}")
+    else:
+        print(f"VCS: {args.vcs}, 项目: {project_path}, 数量: {args.count}, 输出: {out_dir}")
     print()
-    generate_cases(project_path, out_dir, args.count, args.vcs)
+    generate_cases(project_path, out_dir, args.count, args.vcs, revisions)
     print()
-    print(f"完成，共生成 {args.count} 个 case → {out_dir}")
+    total = len(revisions) if revisions else args.count
+    print(f"完成，共生成 {total} 个 case → {out_dir}")
 
 
 if __name__ == "__main__":
