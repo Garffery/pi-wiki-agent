@@ -1,6 +1,6 @@
 # pi-wiki-agent
 
-> Python port of the [pi-mono](../pi-mono) TypeScript monorepo — four packages with aligned code, logic, algorithms, and folder structure.
+> Python port of the [pi-mono](../pi-mono) TypeScript monorepo — three packages with aligned code, logic, algorithms, and folder structure.
 >
 > **[中文 README →](README_CN.md)**
 
@@ -9,7 +9,6 @@
 | `@mariozechner/pi-ai` | `pi_ai` | Unified LLM streaming layer (Google, Anthropic, OpenAI, Bedrock, …) |
 | `@mariozechner/pi-agent-core` | `pi_agent` | Agent loop, tool execution, state management |
 | `@mariozechner/pi-coding-agent` | `pi_coding_agent` | Coding agent CLI with file tools: read, write, edit, bash, grep, find, ls |
-| `@mariozechner/pi-tui` | `pi_tui` | Terminal UI library with differential rendering engine |
 
 ---
 
@@ -32,7 +31,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/openxjarvis/pi-wiki-agent.git
 cd pi-wiki-agent
 
-# Install all four packages and their dependencies in one step
+# Install all packages and their dependencies in one step
 uv sync
 ```
 
@@ -58,34 +57,19 @@ AWS_SECRET_ACCESS_KEY=
 
 > **Important:** `.env` is loaded automatically at runtime. **Never commit it to git.**
 
-### 2. Launch the Interactive TUI
+### 2. Run the Agent
 
 ```bash
-uv run --package pi-coding-agent pi
+uv run --package pi-coding-agent pi --print "your prompt here"
 ```
-
-This opens the full-featured terminal UI where you can chat with the coding agent.
-
-**Keyboard shortcuts:**
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Shift+Enter` | New line in input |
-| `/` | Slash command completion |
-| `@` | File path completion |
-| `Ctrl+P` | Cycle to next model |
-| `Ctrl+C` / `Esc` | Quit |
 
 ### 3. Try a Simple Task
 
-Type in the terminal:
-
-```
-Create a Python function to calculate fibonacci numbers
+```bash
+uv run --package pi-coding-agent pi --print "Create a Python function to calculate fibonacci numbers"
 ```
 
-The agent will write the code and save it to your current directory.
+The agent will write the code and output it to stdout.
 
 ---
 
@@ -124,18 +108,6 @@ uv run --package pi-coding-agent pi --continue
 uv run --package pi-coding-agent pi --resume
 ```
 
-### Slash Commands in TUI
-
-Type `/` in the interactive TUI to see available commands:
-
-| Command | Description |
-|---------|-------------|
-| `/model <name>` | Switch to a different model |
-| `/thinking <level>` | Set thinking detail: `minimal` · `low` · `medium` · `high` · `xhigh` |
-| `/compact` | Compress conversation context to save tokens |
-| `/session` | Show session statistics (tokens used, cost estimate) |
-| `/tools` | List all active tools available to the agent |
-
 ### Full CLI Help
 
 ```bash
@@ -155,7 +127,6 @@ uv run pytest
 ### Per-package
 
 ```bash
-uv run pytest packages/tui/tests/          # TUI components
 uv run pytest packages/ai/tests/           # AI providers
 uv run pytest packages/agent/tests/        # Agent core
 uv run pytest packages/coding-agent/tests/ # CLI + coding agent
@@ -178,12 +149,9 @@ LIVE_TESTS=1 uv run pytest packages/ai/tests/ -v
 
 | Package | Tests | Status |
 |---------|-------|--------|
-| `pi_tui` | 135 | ✅ passed |
 | `pi_ai` + `pi_agent` | 156 | ✅ passed (7 skipped = live-only) |
 | `pi_coding_agent` | 287 | ✅ passed |
-| **Total** | **578** | **✅ all passing** |
-
----
+| **Total** | **443** | **✅ all passing** |
 
 ---
 
@@ -253,19 +221,11 @@ def extension_factory(pi):
 
 ## Windows Support
 
-pi is fully compatible with Windows. See [WINDOWS_FIXES.md](WINDOWS_FIXES.md) for details on:
-
-- Native Windows console input (using `msvcrt` and Win32 API)
-- UTF-8 encoding support
-- Environment variables for troubleshooting (`PI_FORCE_READLINE`, `PYTHONIOENCODING`)
+pi is fully compatible with Windows. See [WINDOWS_FIXES.md](WINDOWS_FIXES.md) for details on UTF-8 encoding support and troubleshooting.
 
 Quick tips for Windows:
 
 ```powershell
-# If TUI has issues, fall back to readline mode
-$env:PI_FORCE_READLINE = "1"
-uv run --package pi-coding-agent pi
-
 # Fix encoding issues with Chinese characters
 $env:PYTHONIOENCODING = "utf-8"
 ```
@@ -324,7 +284,7 @@ Add to `[tool.uv.workspace]` members in `pyproject.toml`:
 
 ```toml
 [tool.uv.workspace]
-members = ["packages/ai", "packages/agent", "packages/coding-agent", "packages/tui", "packages/my-package"]
+members = ["packages/ai", "packages/agent", "packages/coding-agent", "packages/my-package"]
 ```
 
 ### Testing
@@ -368,29 +328,10 @@ pi-wiki-agent/
     ├── coding-agent/             ← CLI entry point & extensions
     │   └── src/pi_coding_agent/
     │       ├── cli.py            ← `pi` command
-    │       ├── core/             ← AgentSession, system prompt, tools
-    │       └── modes/interactive/← TUI interactive mode
-    └── tui/                      ← terminal UI library
-        └── src/pi_tui/
-            ├── components/       ← Editor, SelectList, Markdown, …
-            ├── tui.py            ← differential rendering engine
-            └── keys.py           ← Kitty keyboard protocol parser
+    │       └── core/             ← AgentSession, system prompt, tools
 ```
 
 ---
-
-## TypeScript → Python Mapping
-
-| TypeScript | Python |
-|---|---|
-| `interface X {}` | `class X(BaseModel):` or `@dataclass` |
-| `type X = A \| B` | `X = Union[A, B]` |
-| `async function f()` | `async def f()` |
-| `AsyncIterable<T>` | `AsyncGenerator[T, None]` |
-| `AbortSignal` | `asyncio.Event` (cancellation token) |
-| `EventEmitter` | `dict[str, list[Callable]]` |
-| TypeBox schema | `pydantic.BaseModel` |
-| `vitest` | `pytest` + `pytest-asyncio` |
 
 ---
 
@@ -400,8 +341,6 @@ pi-wiki-agent/
 |---------|----------|
 | `uv: command not found` | Run the install script: `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `GEMINI_API_KEY not set` | Add your key to `.env` |
-| `ModuleNotFoundError: pi_tui` | Use `uv run --package pi-coding-agent pi` instead of `python` directly |
-| TUI shows garbled characters | Ensure your terminal supports UTF-8 (iTerm2, Warp, or any modern terminal) |
 | Tests are skipped | Add `--live` to run real API tests |
 | `400 thought_signature` error | Upgrade to the latest version — this is fixed in the google provider |
 
@@ -411,7 +350,6 @@ pi-wiki-agent/
 
 | Problem | Solution |
 |---------|----------|
-| TUI not responding to keyboard | Set `$env:PI_FORCE_READLINE = "1"` to use readline mode |
 | Chinese characters garbled | Set `$env:PYTHONIOENCODING = "utf-8"` |
 | `ModuleNotFoundError` with `uv run` | Run from project root with `uv sync` first |
 

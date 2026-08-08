@@ -44,3 +44,6 @@ tests/
 
 # Examples (don't push to remote)
 example/
+
+# Electron app (from other branch)
+electron-app/
