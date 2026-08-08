@@ -56,13 +56,25 @@ def main():
         "--report", type=Path, default=None,
         help="生成 Markdown 报告的输出路径",
     )
+    parser.add_argument(
+        "--vcs", choices=["git", "svn"], default="git",
+        help="版本控制类型（默认 git）",
+    )
+    parser.add_argument(
+        "--no-judge", action="store_true",
+        help="跳过 LLM Judge（只做结构检查）",
+    )
     args = parser.parse_args()
 
     if args.dry_run:
         runner = TestRunner(dry_run=True)
     elif args.project:
         from .real_runner import make_runner
-        runner = make_runner(args.project)
+        runner = make_runner(
+            project_path=args.project,
+            vcs=args.vcs,
+            enable_judge=not args.no_judge,
+        )
     else:
         parser.error("请指定 --dry-run 或 --project <路径>")
 

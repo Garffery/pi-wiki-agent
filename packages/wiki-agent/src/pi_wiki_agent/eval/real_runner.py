@@ -162,12 +162,21 @@ async def _real_workflow(inputs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def make_runner(project_path: str) -> TestRunner:
+def make_runner(
+    project_path: str,
+    vcs: str = "git",
+    enable_judge: bool = True,
+) -> TestRunner:
     """创建真实 LLM 测试执行器"""
     def wrapper(inputs: dict) -> dict:
         inputs["project_path"] = project_path
         return asyncio.run(_real_workflow(inputs))
-    return TestRunner(workflow_fn=wrapper)
+    return TestRunner(
+        workflow_fn=wrapper,
+        project_path=project_path,
+        vcs=vcs,
+        enable_judge=enable_judge,
+    )
 
 
 def run_real(project_path: str, cases_dir: str | Path, repeats: int = 1) -> SuiteResult:

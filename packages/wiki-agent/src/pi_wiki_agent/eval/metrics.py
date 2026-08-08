@@ -155,4 +155,36 @@ def compute_all(suite: SuiteResult) -> dict:
         }
 
     metrics["by_type"] = by_type
+
+    # ── 内容指标聚合 (LLM Judge) ──
+    cm_list = [c.content_metrics for c in suite.cases
+               if c.content_metrics and c.content_metrics.get("correctness")]
+    if cm_list:
+        for key in ("correctness", "completeness", "precision"):
+            scores = []
+            for cm in cm_list:
+                item = cm.get(key, {})
+                if isinstance(item, dict) and "score" in item:
+                    scores.append(item["score"])
+            if scores:
+                metrics[f"{key}_mean"] = sum(scores) / len(scores)
+                if len(scores) > 1:
+                    mean = metrics[f"{key}_mean"]
+                    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+                    metrics[f"{key}_std"] = variance ** 0.5
+                else:
+                    metrics[f"{key}_std"] = 0.0
+
+        # 按类型拆分内容指标
+        cm_by_type: dict[str, list[float]] = defaultdict(list)
+        for c in suite.cases:
+            if c.content_metrics and c.content_metrics.get("correctness"):
+                for key in ("correctness", "completeness", "precision"):
+                    item = c.content_metrics.get(key, {})
+                    if isinstance(item, dict) and "score" in item:
+                        cm_by_type.setdefault(f"{key}_by_{c.case_type}", []).append(item["score"])
+        for tk, scores in cm_by_type.items():
+            if scores:
+                metrics[f"content_{tk}_mean"] = sum(scores) / len(scores)
+
     return metrics

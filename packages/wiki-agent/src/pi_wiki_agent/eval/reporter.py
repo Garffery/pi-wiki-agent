@@ -64,6 +64,35 @@ def print_header(suite: SuiteResult, file: TextIO = sys.stdout):
     print(file=file)
 
 
+def _print_content_metrics(cm: dict, file: TextIO = sys.stdout):
+    """打印 LLM Judge 的三指标和逐条判定。"""
+    print("    " + "-" * 44, file=file)
+    print(f"    {_c('LLM Judge', _C.CYAN)}", file=file)
+
+    # 三指标条形图
+    for key, label in [("correctness", "正确性"), ("completeness", "完整性"), ("precision", "精确性")]:
+        item = cm.get(key, {})
+        score = item.get("score", 0) if isinstance(item, dict) else 0
+        bar = "#" * int(score * 20) + "-" * (20 - int(score * 20))
+        color = _C.GREEN if score >= 0.8 else (_C.YELLOW if score >= 0.5 else _C.RED)
+        print(f"    {label:6s}  {_c(bar + f' {score:.2f}', color)}", file=file)
+
+    # claims 逐条判定
+    claims = cm.get("claims", [])
+    if claims:
+        print(f"    {_c('逐条判定:', _C.GRAY)}", file=file)
+        verdict_colors = {
+            "CORRECT": _C.GREEN,
+            "INCORRECT": _C.RED,
+            "UNVERIFIABLE": _C.YELLOW,
+        }
+        for c in claims:
+            v = c.get("verdict", "?")
+            vc = verdict_colors.get(v, _C.GRAY)
+            stmt = _trunc(c.get("statement", ""), 70)
+            print(f"    {_c(f'[{v}]', vc)} {stmt}", file=file)
+
+
 def print_case_result(result: CaseResult, file: TextIO = sys.stdout):
     """打印单个用例结果"""
     icon = _STATUS_ICONS.get(result.status.value, "?")
@@ -93,6 +122,11 @@ def print_case_result(result: CaseResult, file: TextIO = sys.stdout):
         for line in result.error_traceback.split("\n")[-4:]:
             if line.strip():
                 print(f"      {_c(line, _C.GRAY)}", file=file)
+
+    # 内容指标 (LLM Judge)
+    cm = result.content_metrics
+    if cm:
+        _print_content_metrics(cm, file)
 
     # 耗时和通过率
     tag_color = _C.GREEN if result.is_ok else _C.RED
@@ -192,6 +226,15 @@ def write_markdown_report(suite: SuiteResult, output_path: Path) -> Path:
         lines.append(f"| pass^{suite.repeats} | {m['pass^k']*100:.1f}% |")
     if "mean_duration_ms" in m:
         lines.append(f"| 平均耗时 | {m['mean_duration_ms']:.0f}ms |")
+    # 内容指标聚合
+    for key, label in [("correctness", "正确性"), ("completeness", "完整性"), ("precision", "精确性")]:
+        mean_key = f"{key}_mean"
+        std_key = f"{key}_std"
+        if mean_key in m:
+            val = f"{m[mean_key]*100:.1f}%"
+            if std_key in m:
+                val += f" ± {m[std_key]*100:.1f}%"
+            lines.append(f"| {label} (Judge) | {val} |")
     lines.append(f"| 完全通过 | {counts[RunStatus.SUCCESS.value]} |")
     lines.append(f"| 部分失败 | {counts[RunStatus.PARTIAL.value]} |")
     lines.append(f"| 执行错误 | {counts[RunStatus.ERROR.value]} |")
@@ -221,6 +264,25 @@ def write_markdown_report(suite: SuiteResult, output_path: Path) -> Path:
         lines.append(f"- **状态**: {result.status.value}")
         lines.append(f"- **耗时**: {result.duration_ms:.0f}ms")
         lines.append(f"- **断言**: {result.passed}/{result.total} 通过")
+        cm = result.content_metrics
+        if cm:
+            for key, label in [("correctness", "正确性"), ("completeness", "完整性"), ("precision", "精确性")]:
+                item = cm.get(key, {})
+                score = item.get("score", "-") if isinstance(item, dict) else "-"
+                reason = item.get("reason", "") if isinstance(item, dict) else ""
+                lines.append(f"- **{label}**: {score:.2f}" if isinstance(score, float) else f"- **{label}**: {score}")
+                if reason:
+                    lines.append(f"  - {reason}")
+            # claims
+            claims = cm.get("claims", [])
+            if claims:
+                lines.append("")
+                lines.append(f"| 判定 | 陈述 |")
+                lines.append(f"|------|------|")
+                for c in claims:
+                    v = c.get("verdict", "?")
+                    stmt = _trunc(c.get("statement", ""), 80)
+                    lines.append(f"| {v} | {stmt} |")
         lines.append("")
 
         if result.assertions:

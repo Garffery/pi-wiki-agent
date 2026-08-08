@@ -56,6 +56,12 @@ class CaseResult:
     case_type: str     # 类型标签，如 "new_feature"
     status: RunStatus
     assertions: list[Assertion] = field(default_factory=list)
+    content_metrics: dict = field(default_factory=dict)
+    # {"correctness": {"score": 0.50, "reason": "..."},
+    #  "completeness": {"score": 0.60, "reason": "..."},
+    #  "precision": {"score": 0.67, "reason": "..."},
+    #  "claims": [{statement, verdict, evidence}, ...]}
+    # 空 dict = 未执行 Judge（dry-run 或出错）
     duration_ms: float = 0.0
     error_message: str = ""
     error_traceback: str = ""
